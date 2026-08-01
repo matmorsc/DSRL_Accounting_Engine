@@ -44,9 +44,21 @@ def test_missing_payout_date_needs_review(
         "is_bank_deposit": True,
     }])
 
+    quickbooks_batches = pd.DataFrame([{
+        "batch_id": "QB-BATCH-001",
+        "transaction_date": pd.Timestamp("2026-06-01"),
+        "identified_processor": "Stripe",
+        "gross_posted_amount": 100.0,
+        "processor_fee_amount": 0.0,
+        "net_posted_amount": 100.0,
+        "transaction_count": 1,
+        "quickbooks_reference": "",
+    }])
+
     result = build_posting_status(
         payout_ledger=payouts,
         quickbooks_gl=quickbooks,
+        quickbooks_batches=quickbooks_batches,
         posting_overrides_path=empty_overrides(tmp_path),
         assume_posted_through="2026-05-15",
     )

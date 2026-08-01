@@ -6,6 +6,10 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from src.importers.cognito import (
+    find_latest_monthly_renewal,
+    normalize_monthly_renewals,
+)
 from src.importers.discovery import discover_sources
 from src.importers.normalize import (
     normalize_airbnb,
@@ -16,6 +20,8 @@ from src.importers.normalize import (
 )
 from src.importers.quickbooks import normalize_quickbooks_gl
 from src.matching.engine import build_matches
+from src.matching.legacy import match_legacy_payments_to_renewals
+from src.posting.batches import build_quickbooks_posting_batches
 from src.posting.engine import build_posting_status
 from src.reconciliation.engine import build_reconciliation
 from src.reconciliation.payouts import (
@@ -93,6 +99,17 @@ def main() -> int:
         quickbooks_gl = normalize_quickbooks_gl(
             sources["QuickBooks"]
         )
+        quickbooks_batches = build_quickbooks_posting_batches(
+            quickbooks_gl
+        )
+
+        renewal_path = find_latest_monthly_renewal(ROOT)
+        if renewal_path is not None:
+            cognito_renewals = normalize_monthly_renewals(
+                renewal_path
+            )
+        else:
+            cognito_renewals = pd.DataFrame()
 
         matches = build_matches(
             reservations=reservations,
@@ -122,6 +139,20 @@ def main() -> int:
             )
         )
 
+        if not cognito_renewals.empty:
+            legacy_payment_matches = (
+                match_legacy_payments_to_renewals(
+                    payment_ledger=payment_ledger,
+                    renewals=cognito_renewals,
+                    amount_tolerance=float(
+                        settings["matching"]["amount_tolerance"]
+                    ),
+                    date_tolerance_days=10,
+                )
+            )
+        else:
+            legacy_payment_matches = pd.DataFrame()
+
         reconciliation = build_reconciliation(
             reservations=reservations,
             matches=matches,
@@ -138,6 +169,7 @@ def main() -> int:
         posting_status = build_posting_status(
             payout_ledger=payout_ledger,
             quickbooks_gl=quickbooks_gl,
+            quickbooks_batches=quickbooks_batches,
             posting_overrides_path=POSTING_OVERRIDES_PATH,
             assume_posted_through=settings["quickbooks"][
                 "assume_posted_through"
@@ -176,6 +208,9 @@ def main() -> int:
         "QuickBooks GL": save_csv(
             quickbooks_gl, "quickbooks_gl.csv"
         ),
+        "QuickBooks posting batches": save_csv(
+            quickbooks_batches, "quickbooks_posting_batches.csv"
+        ),
         "Reservation matches": save_csv(matches, "matches.csv"),
         "Reconciliation": save_csv(
             reconciliation, "reconciliation.csv"
@@ -185,11 +220,19 @@ def main() -> int:
         ),
     }
 
+    if not cognito_renewals.empty:
+        outputs["Cognito renewals"] = save_csv(
+            cognito_renewals, "cognito_renewals.csv"
+        )
+        outputs["Legacy payment matches"] = save_csv(
+            legacy_payment_matches, "legacy_payment_matches.csv"
+        )
+
     print("Generated outputs")
     print("-" * 40)
     for label, path in outputs.items():
         rows = len(pd.read_csv(path))
-        print(f"{label:<26} {rows:>6} rows  {path.name}")
+        print(f"{label:<30} {rows:>6} rows  {path.name}")
 
     print()
     print("QuickBooks posting summary")
@@ -202,20 +245,22 @@ def main() -> int:
     ):
         print(f"{status:<38} {count:>6}")
 
-    print()
-    print("Eligible for draft journal entries")
-    print("-" * 40)
-    print(
-        posting_status["generate_entry"]
-        .value_counts(dropna=False)
-        .sort_index()
-        .to_string()
-    )
+    if not cognito_renewals.empty:
+        print()
+        print("Legacy Cognito matching summary")
+        print("-" * 40)
+        for status, count in (
+            legacy_payment_matches["match_status"]
+            .value_counts(dropna=False)
+            .sort_index()
+            .items()
+        ):
+            print(f"{status:<38} {count:>6}")
 
     print()
     print(f"Source inventory:\n{inventory_path}")
     print()
-    print("Posting-control reconciliation passed.")
+    print("QuickBooks batch and Cognito reconciliation passed.")
     return 0
 
 

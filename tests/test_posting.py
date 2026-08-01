@@ -36,6 +36,20 @@ def quickbooks(match: bool = True) -> pd.DataFrame:
     }])
 
 
+def quickbooks_batches(match: bool = True) -> pd.DataFrame:
+    amount = 100.0 if match else 75.0
+    return pd.DataFrame([{
+        "batch_id": "QB-BATCH-001",
+        "transaction_date": pd.Timestamp("2026-06-01"),
+        "identified_processor": "Stripe",
+        "gross_posted_amount": amount,
+        "processor_fee_amount": 0.0,
+        "net_posted_amount": amount,
+        "transaction_count": 1,
+        "quickbooks_reference": "123",
+    }])
+
+
 def empty_overrides(tmp_path):
     path = tmp_path / "posting_overrides.csv"
     path.write_text(
@@ -52,16 +66,12 @@ def test_exact_qb_match_is_already_posted(
     result = build_posting_status(
         payout_ledger=payouts(),
         quickbooks_gl=quickbooks(match=True),
-        posting_overrides_path=empty_overrides(
-            tmp_path
-        ),
+        quickbooks_batches=quickbooks_batches(match=True),
+        posting_overrides_path=empty_overrides(tmp_path),
         assume_posted_through="2026-05-15",
     )
 
-    assert (
-        result.loc[0, "posting_status"]
-        == "Already Posted"
-    )
+    assert result.loc[0, "posting_status"] == "Already Posted"
     assert result.loc[0, "generate_entry"] == "No"
 
 
@@ -71,9 +81,8 @@ def test_after_cutoff_without_qb_match_is_unposted(
     result = build_posting_status(
         payout_ledger=payouts(),
         quickbooks_gl=quickbooks(match=False),
-        posting_overrides_path=empty_overrides(
-            tmp_path
-        ),
+        quickbooks_batches=quickbooks_batches(match=False),
+        posting_overrides_path=empty_overrides(tmp_path),
         assume_posted_through="2026-05-15",
     )
 
@@ -85,26 +94,18 @@ def test_before_cutoff_without_qb_match_needs_review(
     tmp_path,
 ) -> None:
     frame = payouts()
-    frame.loc[0, "transaction_date"] = pd.Timestamp(
-        "2026-05-01"
-    )
-    frame.loc[
-        0, "bank_transaction_date"
-    ] = pd.Timestamp("2026-05-01")
+    frame.loc[0, "transaction_date"] = pd.Timestamp("2026-05-01")
+    frame.loc[0, "bank_transaction_date"] = pd.Timestamp("2026-05-01")
 
     result = build_posting_status(
         payout_ledger=frame,
         quickbooks_gl=quickbooks(match=False),
-        posting_overrides_path=empty_overrides(
-            tmp_path
-        ),
+        quickbooks_batches=quickbooks_batches(match=False),
+        posting_overrides_path=empty_overrides(tmp_path),
         assume_posted_through="2026-05-15",
     )
 
-    assert (
-        result.loc[0, "posting_status"]
-        == "Needs Review"
-    )
+    assert result.loc[0, "posting_status"] == "Needs Review"
     assert result.loc[0, "generate_entry"] == "No"
 
 
@@ -122,12 +123,10 @@ def test_override_can_force_generate_entry(
     result = build_posting_status(
         payout_ledger=payouts(),
         quickbooks_gl=quickbooks(match=True),
+        quickbooks_batches=quickbooks_batches(match=True),
         posting_overrides_path=path,
         assume_posted_through="2026-05-15",
     )
 
-    assert (
-        result.loc[0, "posting_status"]
-        == "Generate Entry"
-    )
+    assert result.loc[0, "posting_status"] == "Generate Entry"
     assert result.loc[0, "generate_entry"] == "Yes"
