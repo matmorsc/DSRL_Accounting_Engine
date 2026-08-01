@@ -16,8 +16,12 @@ from src.importers.normalize import (
 )
 from src.matching.engine import build_matches
 from src.reconciliation.engine import build_reconciliation
+from src.reconciliation.payouts import (
+    build_payment_ledger,
+    build_payout_ledger,
+    build_payout_reconciliation,
+)
 from src.reports.inventory import write_source_inventory
-
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config" / "settings.yaml"
@@ -36,10 +40,6 @@ def save_csv(frame: pd.DataFrame, filename: str) -> Path:
 def main() -> int:
     print("DSRL Accounting Engine")
     print("=" * 40)
-
-    if not CONFIG_PATH.exists():
-        print(f"ERROR: Missing configuration file:\n{CONFIG_PATH}")
-        return 1
 
     with CONFIG_PATH.open("r", encoding="utf-8") as handle:
         settings = yaml.safe_load(handle)
@@ -84,7 +84,6 @@ def main() -> int:
         )
 
         bank_transactions = normalize_bank(sources["Bank"][0])
-
         quickbooks_inventory = normalize_quickbooks_inventory(
             sources["QuickBooks"]
         )
@@ -95,6 +94,26 @@ def main() -> int:
             amount_tolerance=float(
                 settings["matching"]["amount_tolerance"]
             ),
+        )
+
+        payment_ledger = build_payment_ledger(
+            processor_transactions
+        )
+        payout_ledger = build_payout_ledger(
+            processor_transactions
+        )
+        payment_ledger, payout_ledger = (
+            build_payout_reconciliation(
+                payments=payment_ledger,
+                payouts=payout_ledger,
+                bank_transactions=bank_transactions,
+                date_tolerance_days=int(
+                    settings["matching"]["bank_date_tolerance_days"]
+                ),
+                amount_tolerance=float(
+                    settings["matching"]["amount_tolerance"]
+                ),
+            )
         )
 
         reconciliation = build_reconciliation(
@@ -115,48 +134,58 @@ def main() -> int:
     outputs = {
         "Reservations": save_csv(reservations, "reservations.csv"),
         "Processor transactions": save_csv(
-            processor_transactions,
-            "processor_transactions.csv",
+            processor_transactions, "processor_transactions.csv"
+        ),
+        "Payment ledger": save_csv(
+            payment_ledger, "payment_ledger.csv"
+        ),
+        "Payout ledger": save_csv(
+            payout_ledger, "payout_ledger.csv"
         ),
         "Bank transactions": save_csv(
-            bank_transactions,
-            "bank_transactions.csv",
+            bank_transactions, "bank_transactions.csv"
         ),
         "QuickBooks inventory": save_csv(
-            quickbooks_inventory,
-            "quickbooks_inventory.csv",
+            quickbooks_inventory, "quickbooks_inventory.csv"
         ),
         "Reservation matches": save_csv(matches, "matches.csv"),
         "Reconciliation": save_csv(
-            reconciliation,
-            "reconciliation.csv",
+            reconciliation, "reconciliation.csv"
         ),
     }
 
     print("Generated outputs")
     print("-" * 40)
-
     for label, path in outputs.items():
         rows = len(pd.read_csv(path))
         print(f"{label:<26} {rows:>6} rows  {path.name}")
 
     print()
-    print("Reconciliation summary")
+    print("Payout summary")
     print("-" * 40)
-
-    summary = (
-        reconciliation["reconciliation_status"]
+    for status, count in (
+        payout_ledger["bank_match_status"]
         .value_counts(dropna=False)
         .sort_index()
-    )
+        .items()
+    ):
+        print(f"{status:<38} {count:>6}")
 
-    for status, count in summary.items():
+    print()
+    print("Payment allocation summary")
+    print("-" * 40)
+    for status, count in (
+        payment_ledger["payout_assignment_status"]
+        .value_counts(dropna=False)
+        .sort_index()
+        .items()
+    ):
         print(f"{status:<38} {count:>6}")
 
     print()
     print(f"Source inventory:\n{inventory_path}")
     print()
-    print("Reconciliation passed.")
+    print("Payout and bank reconciliation passed.")
     return 0
 
 
