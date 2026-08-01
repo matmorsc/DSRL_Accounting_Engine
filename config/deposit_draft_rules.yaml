@@ -15,7 +15,7 @@ accounts:
 
 processor_fee_accounts:
   Stripe: Bank Charges & Fees:Stripe Processing Fees
-  Airbnb: null
+  Airbnb: AirBNB Fees
 
 tax_descriptions:
   state_tax: State
