@@ -1,0 +1,26 @@
+bank_account: Business Checking
+amount_tolerance: 0.02
+
+classes:
+  Cabin: Cabins
+  RV: RV Sites
+  Motel: Hospitality
+  tax: Hospitality
+  fees: Hospitality
+  refunds: Hospitality
+
+accounts:
+  tax_payable: Sales & Lodging Taxes Payable
+  refunds: Refunds
+
+processor_fee_accounts:
+  Stripe: Bank Charges & Fees:Stripe Processing Fees
+  Airbnb: null
+
+tax_descriptions:
+  state_tax: State
+  county_tax: County
+  local_tax: Local
+
+marketplace_remitted_tax_processors:
+  - Airbnb
