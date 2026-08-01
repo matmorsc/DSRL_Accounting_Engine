@@ -31,13 +31,8 @@ REQUIRED_OVERRIDE_COLUMNS = {
 def _norm(value: object) -> str:
     if value is None:
         return ""
-
     text = str(value).strip()
-
-    if text.lower() == "nan":
-        return ""
-
-    return text
+    return "" if text.lower() == "nan" else text
 
 
 def _read_overrides(path: Path) -> pd.DataFrame:
@@ -45,64 +40,50 @@ def _read_overrides(path: Path) -> pd.DataFrame:
         return pd.DataFrame(columns=sorted(REQUIRED_OVERRIDE_COLUMNS))
 
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-
     missing = sorted(REQUIRED_OVERRIDE_COLUMNS.difference(frame.columns))
     if missing:
-        raise ValueError(
-            f"Manual overrides missing columns: {missing}"
-        )
+        raise ValueError(f"Manual overrides missing columns: {missing}")
 
     frame = frame.copy()
-    frame["override_type"] = (
-        frame["override_type"].astype(str).str.strip()
-    )
+    frame["override_type"] = frame["override_type"].astype(str).str.strip()
     frame["status"] = frame["status"].astype(str).str.strip()
 
     invalid = sorted(
-        set(frame.loc[
-            frame["override_type"].ne(""),
-            "override_type",
-        ]).difference(VALID_OVERRIDE_TYPES)
+        set(
+            frame.loc[
+                frame["override_type"].ne(""),
+                "override_type",
+            ]
+        ).difference(VALID_OVERRIDE_TYPES)
     )
-
     if invalid:
-        raise ValueError(
-            "Invalid override types: " + ", ".join(invalid)
-        )
+        raise ValueError("Invalid override types: " + ", ".join(invalid))
 
-    active = frame.loc[
+    return frame.loc[
         ~frame["status"].str.lower().isin(
             {"inactive", "superseded", "void"}
         )
     ].copy()
-
-    return active
 
 
 def _select_override(
     reservation: pd.Series,
     overrides: pd.DataFrame,
 ) -> pd.Series | None:
-    reservation_id = _norm(
-        reservation.get("reservation_id")
-    )
+    reservation_id = _norm(reservation.get("reservation_id"))
     channel_id = _norm(
         reservation.get("channel_reservation_id")
     )
 
     candidates = overrides.loc[
         (
-            overrides["reservation_id"]
-            .astype(str)
-            .str.strip()
+            overrides["reservation_id"].astype(str).str.strip()
             .eq(reservation_id)
             & (reservation_id != "")
         )
         |
         (
-            overrides["channel_reservation_id"]
-            .astype(str)
-            .str.strip()
+            overrides["channel_reservation_id"].astype(str).str.strip()
             .eq(channel_id)
             & (channel_id != "")
         )
@@ -110,23 +91,43 @@ def _select_override(
 
     if candidates.empty:
         return None
-
     if len(candidates) > 1:
         raise ValueError(
             "Multiple active overrides found for reservation "
             f"{reservation_id or channel_id}"
         )
-
     return candidates.iloc[0]
 
 
-def _processor_totals(
+def _linked_payment_events(
+    reservation: pd.Series,
+    payment_ledger: pd.DataFrame,
+) -> pd.DataFrame:
+    reservation_id = _norm(reservation.get("reservation_id"))
+    channel_id = _norm(
+        reservation.get("channel_reservation_id")
+    )
+
+    return payment_ledger.loc[
+        (
+            payment_ledger["reservation_id"]
+            .astype(str).str.strip().eq(reservation_id)
+            & (reservation_id != "")
+        )
+        |
+        (
+            payment_ledger["channel_reservation_id"]
+            .astype(str).str.strip().eq(channel_id)
+            & (channel_id != "")
+        )
+    ].copy()
+
+
+def _payment_totals(
     reservation: pd.Series,
     processor_transactions: pd.DataFrame,
 ) -> tuple[float, float]:
-    reservation_id = _norm(
-        reservation.get("reservation_id")
-    )
+    reservation_id = _norm(reservation.get("reservation_id"))
     channel_id = _norm(
         reservation.get("channel_reservation_id")
     )
@@ -134,17 +135,13 @@ def _processor_totals(
     linked = processor_transactions.loc[
         (
             processor_transactions["reservation_id"]
-            .astype(str)
-            .str.strip()
-            .eq(reservation_id)
+            .astype(str).str.strip().eq(reservation_id)
             & (reservation_id != "")
         )
         |
         (
             processor_transactions["channel_reservation_id"]
-            .astype(str)
-            .str.strip()
-            .eq(channel_id)
+            .astype(str).str.strip().eq(channel_id)
             & (channel_id != "")
         )
     ].copy()
@@ -154,25 +151,17 @@ def _processor_totals(
             {"charge", "payment", "reservation"}
         )
     ]
-
     refunds = linked.loc[
         linked["transaction_type"].eq("refund")
     ]
 
-    payment_total = round(
-        payments["gross_amount"].abs().sum(),
-        2,
+    return (
+        round(payments["gross_amount"].abs().sum(), 2),
+        round(refunds["gross_amount"].abs().sum(), 2),
     )
 
-    refund_total = round(
-        refunds["gross_amount"].abs().sum(),
-        2,
-    )
 
-    return payment_total, refund_total
-
-
-def _automatic_status(
+def _automatic_payment_status(
     reservation: pd.Series,
     match: pd.Series,
     acquisition_date: pd.Timestamp,
@@ -186,37 +175,23 @@ def _automatic_status(
         reservation.get("payment_method")
     ).lower()
 
-    confirmation_date = pd.to_datetime(
-        reservation.get("confirmation_date"),
-        errors="coerce",
-    )
     check_in = pd.to_datetime(
-        reservation.get("check_in"),
-        errors="coerce",
+        reservation.get("check_in"), errors="coerce"
     )
     check_out = pd.to_datetime(
-        reservation.get("check_out"),
-        errors="coerce",
+        reservation.get("check_out"), errors="coerce"
     )
 
-    total_paid = float(
-        reservation.get("total_paid", 0.0)
-    )
+    total_paid = float(reservation.get("total_paid", 0.0))
     total_refunded = float(
         reservation.get("total_refunded", 0.0)
     )
     balance_due = float(
         reservation.get("balance_due", 0.0)
     )
+    match_status = _norm(match.get("match_status"))
 
-    match_status = _norm(
-        match.get("match_status")
-    )
-
-    if (
-        pd.notna(check_out)
-        and check_out < acquisition_date
-    ):
+    if pd.notna(check_out) and check_out < acquisition_date:
         return (
             "Outside Reporting Scope",
             "Expected / informational",
@@ -293,54 +268,37 @@ def _automatic_status(
         )
 
     payment_difference = round(
-        processor_payment_total - total_paid,
-        2,
+        processor_payment_total - total_paid, 2
     )
     refund_difference = round(
-        processor_refund_total - total_refunded,
-        2,
+        processor_refund_total - total_refunded, 2
     )
 
     if abs(refund_difference) > amount_tolerance:
         return (
             "Refund Discrepancy",
             "Needs accounting follow-up",
-            (
-                "Guesty and processor refund totals differ by "
-                f"{refund_difference:.2f}."
-            ),
+            f"Guesty and processor refunds differ by {refund_difference:.2f}.",
         )
 
     if abs(payment_difference) > amount_tolerance:
         return (
             "Payment Amount Mismatch",
             "Needs accounting follow-up",
-            (
-                "Guesty and processor payment totals differ by "
-                f"{payment_difference:.2f}."
-            ),
-        )
-
-    if match_status == "Exact Match":
-        return (
-            "Processor Matched",
-            "Ready for payout reconciliation",
-            "Reservation and processor transaction are linked.",
+            f"Guesty and processor payments differ by {payment_difference:.2f}.",
         )
 
     return (
-        "Needs Review",
-        "Needs human review",
-        "No reconciliation rule produced a final status.",
+        "Payment Resolved",
+        "Ready for payout reconciliation",
+        "Reservation and processor payment activity agree.",
     )
 
 
 def _override_status(
     override: pd.Series,
 ) -> tuple[str, str, str]:
-    override_type = _norm(
-        override.get("override_type")
-    )
+    override_type = _norm(override.get("override_type"))
     notes = _norm(override.get("notes"))
 
     categories = {
@@ -365,55 +323,174 @@ def _override_status(
     )
 
 
+def _lifecycle_details(
+    linked_events: pd.DataFrame,
+    payout_ledger: pd.DataFrame,
+) -> dict[str, object]:
+    if linked_events.empty:
+        return {
+            "payout_ids": "",
+            "payout_dates": "",
+            "payout_status": "No Linked Payment Event",
+            "bank_transaction_ids": "",
+            "bank_deposit_dates": "",
+            "bank_status": "No Linked Payout",
+            "all_payouts_allocated": False,
+            "all_payouts_bank_matched": False,
+        }
+
+    assigned = linked_events.loc[
+        linked_events["payout_assignment_status"].eq("Assigned")
+        & linked_events["payout_id"].astype(str).str.strip().ne("")
+    ]
+
+    if assigned.empty:
+        pending = linked_events[
+            "payout_assignment_status"
+        ].astype(str).str.strip().unique()
+
+        return {
+            "payout_ids": "",
+            "payout_dates": "",
+            "payout_status": (
+                "Pending Future Payout"
+                if "Pending Future Payout" in pending
+                else "Payout Assignment Review"
+            ),
+            "bank_transaction_ids": "",
+            "bank_deposit_dates": "",
+            "bank_status": "No Linked Payout",
+            "all_payouts_allocated": False,
+            "all_payouts_bank_matched": False,
+        }
+
+    payout_ids = sorted(
+        {
+            _norm(value)
+            for value in assigned["payout_id"]
+            if _norm(value)
+        }
+    )
+
+    linked_payouts = payout_ledger.loc[
+        payout_ledger["payout_id"].astype(str).isin(payout_ids)
+    ].copy()
+
+    payout_dates = sorted(
+        {
+            pd.to_datetime(value).date().isoformat()
+            for value in linked_payouts["transaction_date"]
+            if pd.notna(pd.to_datetime(value, errors="coerce"))
+        }
+    )
+
+    allocation_statuses = set(
+        linked_payouts["allocation_status"]
+        .astype(str).str.strip()
+    )
+    bank_statuses = set(
+        linked_payouts["bank_match_status"]
+        .astype(str).str.strip()
+    )
+
+    all_allocated = (
+        not linked_payouts.empty
+        and allocation_statuses == {"Fully Allocated"}
+    )
+    all_bank_matched = (
+        not linked_payouts.empty
+        and bank_statuses == {"Matched"}
+    )
+
+    bank_ids = sorted(
+        {
+            _norm(value)
+            for value in linked_payouts["bank_transaction_id"]
+            if _norm(value)
+        }
+    )
+    bank_dates = sorted(
+        {
+            pd.to_datetime(value).date().isoformat()
+            for value in linked_payouts["bank_transaction_date"]
+            if pd.notna(pd.to_datetime(value, errors="coerce"))
+        }
+    )
+
+    if all_allocated:
+        payout_status = "Payout Fully Allocated"
+    elif "Difference" in allocation_statuses:
+        payout_status = "Payout Allocation Review"
+    else:
+        payout_status = "Payout Unallocated"
+
+    bank_status = (
+        "Deposit Matched"
+        if all_bank_matched
+        else "Deposit Missing or Review"
+    )
+
+    return {
+        "payout_ids": " | ".join(payout_ids),
+        "payout_dates": " | ".join(payout_dates),
+        "payout_status": payout_status,
+        "bank_transaction_ids": " | ".join(bank_ids),
+        "bank_deposit_dates": " | ".join(bank_dates),
+        "bank_status": bank_status,
+        "all_payouts_allocated": all_allocated,
+        "all_payouts_bank_matched": all_bank_matched,
+    }
+
+
+def _final_lifecycle_status(
+    payment_status: str,
+    payment_category: str,
+    payout_status: str,
+    bank_status: str,
+    all_payouts_allocated: bool,
+    all_payouts_bank_matched: bool,
+) -> tuple[str, str]:
+    if payment_category in {
+        "Expected / informational",
+        "Documented business event",
+    }:
+        return payment_status, "No"
+
+    if payment_status != "Payment Resolved":
+        return payment_status, "Yes"
+
+    if payout_status == "Pending Future Payout":
+        return "Payout Pending", "No"
+
+    if not all_payouts_allocated:
+        return "Payout Allocation Review", "Yes"
+
+    if not all_payouts_bank_matched:
+        return "Deposit Missing or Review", "Yes"
+
+    return "Fully Reconciled", "No"
+
+
 def build_reconciliation(
     reservations: pd.DataFrame,
     matches: pd.DataFrame,
     processor_transactions: pd.DataFrame,
+    payment_ledger: pd.DataFrame,
+    payout_ledger: pd.DataFrame,
     overrides_path: Path,
     acquisition_date: str,
     amount_tolerance: float = 0.02,
     as_of_date: str | None = None,
 ) -> pd.DataFrame:
-    required_reservation_columns = {
-        "reservation_id",
-        "channel_reservation_id",
-        "guest",
-        "listing",
-        "property_class",
-        "source",
-        "payment_method",
-        "confirmation_date",
-        "check_in",
-        "check_out",
-        "income_account",
-        "total_paid",
-        "total_refunded",
-        "balance_due",
-    }
-
-    missing = sorted(
-        required_reservation_columns.difference(
-            reservations.columns
-        )
-    )
-
-    if missing:
-        raise ValueError(
-            f"Reservations missing columns: {missing}"
-        )
-
     if len(reservations) != len(matches):
         raise ValueError(
             "Reservation and match row counts do not agree."
         )
 
     overrides = _read_overrides(overrides_path)
-
     acquisition = pd.to_datetime(
-        acquisition_date,
-        errors="raise",
+        acquisition_date, errors="raise"
     )
-
     today = (
         pd.to_datetime(as_of_date, errors="raise")
         if as_of_date
@@ -424,22 +501,20 @@ def build_reconciliation(
 
     for index, reservation in reservations.iterrows():
         match = matches.iloc[index]
-
         override = _select_override(
-            reservation,
-            overrides,
+            reservation, overrides
         )
 
         processor_payment_total, processor_refund_total = (
-            _processor_totals(
+            _payment_totals(
                 reservation,
                 processor_transactions,
             )
         )
 
         if override is not None:
-            status, category, explanation = _override_status(
-                override
+            payment_status, category, explanation = (
+                _override_status(override)
             )
             override_type = _norm(
                 override.get("override_type")
@@ -452,27 +527,45 @@ def build_reconciliation(
                 errors="coerce",
             )
         else:
-            status, category, explanation = _automatic_status(
-                reservation=reservation,
-                match=match,
-                acquisition_date=acquisition,
-                today=today,
-                processor_payment_total=processor_payment_total,
-                processor_refund_total=processor_refund_total,
-                amount_tolerance=amount_tolerance,
+            payment_status, category, explanation = (
+                _automatic_payment_status(
+                    reservation=reservation,
+                    match=match,
+                    acquisition_date=acquisition,
+                    today=today,
+                    processor_payment_total=processor_payment_total,
+                    processor_refund_total=processor_refund_total,
+                    amount_tolerance=amount_tolerance,
+                )
             )
             override_type = ""
             override_notes = ""
             override_amount = float("nan")
 
-        review_required = (
-            "No"
-            if category in {
-                "Expected / informational",
-                "Documented business event",
-                "Ready for payout reconciliation",
-            }
-            else "Yes"
+        linked_events = _linked_payment_events(
+            reservation, payment_ledger
+        )
+        lifecycle = _lifecycle_details(
+            linked_events, payout_ledger
+        )
+
+        final_status, review_required = (
+            _final_lifecycle_status(
+                payment_status=payment_status,
+                payment_category=category,
+                payout_status=str(
+                    lifecycle["payout_status"]
+                ),
+                bank_status=str(
+                    lifecycle["bank_status"]
+                ),
+                all_payouts_allocated=bool(
+                    lifecycle["all_payouts_allocated"]
+                ),
+                all_payouts_bank_matched=bool(
+                    lifecycle["all_payouts_bank_matched"]
+                ),
+            )
         )
 
         rows.append(
@@ -515,7 +608,9 @@ def build_reconciliation(
                     reservation.get("total_paid", 0.0)
                 ),
                 "guesty_total_refunded": float(
-                    reservation.get("total_refunded", 0.0)
+                    reservation.get(
+                        "total_refunded", 0.0
+                    )
                 ),
                 "guesty_balance_due": float(
                     reservation.get("balance_due", 0.0)
@@ -537,8 +632,7 @@ def build_reconciliation(
                     processor_refund_total
                     - float(
                         reservation.get(
-                            "total_refunded",
-                            0.0,
+                            "total_refunded", 0.0
                         )
                     ),
                     2,
@@ -550,14 +644,27 @@ def build_reconciliation(
                     match.get("match_method")
                 ),
                 "confidence_score": int(
-                    match.get("confidence_score", 0)
+                    match.get(
+                        "confidence_score", 0
+                    )
                 ),
+                "payment_status": payment_status,
+                "payment_status_category": category,
+                "payment_status_explanation": explanation,
+                "payout_ids": lifecycle["payout_ids"],
+                "payout_dates": lifecycle["payout_dates"],
+                "payout_status": lifecycle["payout_status"],
+                "bank_transaction_ids": lifecycle[
+                    "bank_transaction_ids"
+                ],
+                "bank_deposit_dates": lifecycle[
+                    "bank_deposit_dates"
+                ],
+                "bank_status": lifecycle["bank_status"],
                 "override_type": override_type,
                 "override_amount": override_amount,
                 "override_notes": override_notes,
-                "reconciliation_status": status,
-                "status_category": category,
-                "status_explanation": explanation,
+                "lifecycle_status": final_status,
                 "review_required": review_required,
                 "as_of_date": today.normalize(),
             }

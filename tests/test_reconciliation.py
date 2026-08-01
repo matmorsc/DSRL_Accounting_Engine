@@ -51,15 +51,85 @@ def _match(
 def _processor(
     *,
     reservation_id: str = "r1",
+    channel_id: str = "",
     transaction_type: str = "charge",
     amount: float = 100.0,
 ) -> dict[str, object]:
     return {
         "reservation_id": reservation_id,
-        "channel_reservation_id": "",
+        "channel_reservation_id": channel_id,
         "transaction_type": transaction_type,
         "gross_amount": amount,
     }
+
+
+def _payment_ledger(
+    *,
+    reservation_id: str = "r1",
+    channel_id: str = "",
+    payout_status: str = "Assigned",
+    payout_id: str = "po1",
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "reservation_id": reservation_id,
+                "channel_reservation_id": channel_id,
+                "payout_assignment_status": payout_status,
+                "payout_id": payout_id,
+            }
+        ]
+    )
+
+
+def _payout_ledger(
+    *,
+    payout_id: str = "po1",
+    allocation_status: str = "Fully Allocated",
+    bank_status: str = "Matched",
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "payout_id": payout_id,
+                "transaction_date": pd.Timestamp("2026-07-04"),
+                "allocation_status": allocation_status,
+                "bank_match_status": bank_status,
+                "bank_transaction_id": (
+                    "bank1" if bank_status == "Matched" else ""
+                ),
+                "bank_transaction_date": (
+                    pd.Timestamp("2026-07-04")
+                    if bank_status == "Matched"
+                    else pd.NaT
+                ),
+            }
+        ]
+    )
+
+
+def _empty_payment_ledger() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "reservation_id",
+            "channel_reservation_id",
+            "payout_assignment_status",
+            "payout_id",
+        ]
+    )
+
+
+def _empty_payout_ledger() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "payout_id",
+            "transaction_date",
+            "allocation_status",
+            "bank_match_status",
+            "bank_transaction_id",
+            "bank_transaction_date",
+        ]
+    )
 
 
 def _empty_overrides(tmp_path: Path) -> Path:
@@ -101,16 +171,18 @@ def test_future_airbnb_is_expected(
     )
 
     result = build_reconciliation(
-        reservations,
-        matches,
-        processors,
-        _empty_overrides(tmp_path),
+        reservations=reservations,
+        matches=matches,
+        processor_transactions=processors,
+        payment_ledger=_empty_payment_ledger(),
+        payout_ledger=_empty_payout_ledger(),
+        overrides_path=_empty_overrides(tmp_path),
         acquisition_date="2025-10-01",
         as_of_date="2026-08-01",
     )
 
     assert (
-        result.loc[0, "reconciliation_status"]
+        result.loc[0, "lifecycle_status"]
         == "Expected Future Airbnb Payment"
     )
     assert result.loc[0, "review_required"] == "No"
@@ -141,21 +213,23 @@ def test_pre_acquisition_is_outside_scope(
     )
 
     result = build_reconciliation(
-        reservations,
-        matches,
-        processors,
-        _empty_overrides(tmp_path),
+        reservations=reservations,
+        matches=matches,
+        processor_transactions=processors,
+        payment_ledger=_empty_payment_ledger(),
+        payout_ledger=_empty_payout_ledger(),
+        overrides_path=_empty_overrides(tmp_path),
         acquisition_date="2025-10-01",
         as_of_date="2026-08-01",
     )
 
     assert (
-        result.loc[0, "reconciliation_status"]
+        result.loc[0, "lifecycle_status"]
         == "Outside Reporting Scope"
     )
 
 
-def test_exact_payment_becomes_processor_matched(
+def test_exact_payment_becomes_fully_reconciled(
     tmp_path: Path,
 ) -> None:
     reservations = pd.DataFrame(
@@ -167,17 +241,19 @@ def test_exact_payment_becomes_processor_matched(
     )
 
     result = build_reconciliation(
-        reservations,
-        matches,
-        processors,
-        _empty_overrides(tmp_path),
+        reservations=reservations,
+        matches=matches,
+        processor_transactions=processors,
+        payment_ledger=_payment_ledger(),
+        payout_ledger=_payout_ledger(),
+        overrides_path=_empty_overrides(tmp_path),
         acquisition_date="2025-10-01",
         as_of_date="2026-08-01",
     )
 
     assert (
-        result.loc[0, "reconciliation_status"]
-        == "Processor Matched"
+        result.loc[0, "lifecycle_status"]
+        == "Fully Reconciled"
     )
     assert result.loc[0, "review_required"] == "No"
 
@@ -211,16 +287,18 @@ def test_override_replaces_automatic_status(
     )
 
     result = build_reconciliation(
-        reservations,
-        matches,
-        processors,
-        override_path,
+        reservations=reservations,
+        matches=matches,
+        processor_transactions=processors,
+        payment_ledger=_empty_payment_ledger(),
+        payout_ledger=_empty_payout_ledger(),
+        overrides_path=override_path,
         acquisition_date="2025-10-01",
         as_of_date="2026-08-01",
     )
 
     assert (
-        result.loc[0, "reconciliation_status"]
+        result.loc[0, "lifecycle_status"]
         == "Approved Refund"
     )
     assert result.loc[0, "review_required"] == "No"

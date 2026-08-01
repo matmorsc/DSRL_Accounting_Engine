@@ -120,6 +120,8 @@ def main() -> int:
             reservations=reservations,
             matches=matches,
             processor_transactions=processor_transactions,
+            payment_ledger=payment_ledger,
+            payout_ledger=payout_ledger,
             overrides_path=OVERRIDES_PATH,
             acquisition_date=settings["business"]["acquisition_date"],
             amount_tolerance=float(
@@ -161,10 +163,10 @@ def main() -> int:
         print(f"{label:<26} {rows:>6} rows  {path.name}")
 
     print()
-    print("Payout summary")
+    print("Lifecycle summary")
     print("-" * 40)
     for status, count in (
-        payout_ledger["bank_match_status"]
+        reconciliation["lifecycle_status"]
         .value_counts(dropna=False)
         .sort_index()
         .items()
@@ -172,20 +174,19 @@ def main() -> int:
         print(f"{status:<38} {count:>6}")
 
     print()
-    print("Payment allocation summary")
+    print("Review queue")
     print("-" * 40)
-    for status, count in (
-        payment_ledger["payout_assignment_status"]
+    print(
+        reconciliation["review_required"]
         .value_counts(dropna=False)
         .sort_index()
-        .items()
-    ):
-        print(f"{status:<38} {count:>6}")
+        .to_string()
+    )
 
     print()
     print(f"Source inventory:\n{inventory_path}")
     print()
-    print("Payout and bank reconciliation passed.")
+    print("Lifecycle reconciliation passed.")
     return 0
 
 
