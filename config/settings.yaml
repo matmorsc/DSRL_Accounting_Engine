@@ -1,0 +1,24 @@
+business:
+  name: Dark Sky River Lodge
+  legal_entity: Ark Hospitality, LLC
+  timezone: America/Denver
+  acquisition_date: 2025-10-01
+
+classification:
+  monthly_night_threshold: 28
+
+income_accounts:
+  cabin_monthly: Cabin Rent - Monthly
+  cabin_short_term: Cabin Rent - Short-Term
+  motel_monthly: Motel Rent - Monthly
+  motel_short_term: Motel Rent - Short Term
+  rv_monthly: RV Rent - Monthly
+  rv_nightly: RV Rent - Nightly
+  cancellations: Cancellations
+  coupon_code: Coupon Code
+  refunds: Refunds
+
+matching:
+  bank_date_tolerance_days: 5
+  amount_tolerance: 0.02
+  allow_fuzzy_matching: false
