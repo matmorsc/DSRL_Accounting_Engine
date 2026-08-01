@@ -23,6 +23,10 @@ from src.matching.engine import build_matches
 from src.matching.legacy import match_legacy_payments_to_renewals
 from src.posting.batches import build_quickbooks_posting_batches
 from src.posting.engine import build_posting_status
+from src.reconciliation.airbnb_sequence import (
+    assign_airbnb_payouts_by_sequence,
+    summarize_airbnb_sequence_groups,
+)
 from src.reconciliation.engine import build_reconciliation
 from src.reconciliation.payouts import (
     build_payment_ledger,
@@ -30,6 +34,7 @@ from src.reconciliation.payouts import (
     build_payout_reconciliation,
 )
 from src.reports.inventory import write_source_inventory
+
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config" / "settings.yaml"
@@ -84,15 +89,31 @@ def main() -> int:
                 )
             )
 
+        airbnb_transactions = normalize_airbnb(
+            sources["Airbnb"][0]
+        )
+        (
+            airbnb_transactions,
+            airbnb_sequence_diagnostics,
+        ) = assign_airbnb_payouts_by_sequence(
+            airbnb_transactions
+        )
+        airbnb_sequence_summary = (
+            summarize_airbnb_sequence_groups(
+                airbnb_transactions
+            )
+        )
+
         processor_transactions = pd.concat(
             [
                 *stripe_frames,
-                normalize_airbnb(sources["Airbnb"][0]),
+                airbnb_transactions,
             ],
             ignore_index=True,
         )
 
         bank_transactions = normalize_bank(sources["Bank"][0])
+
         quickbooks_inventory = normalize_quickbooks_inventory(
             sources["QuickBooks"]
         )
@@ -189,54 +210,93 @@ def main() -> int:
         return 1
 
     outputs = {
-        "Reservations": save_csv(reservations, "reservations.csv"),
+        "Reservations": save_csv(
+            reservations,
+            "reservations.csv",
+        ),
         "Processor transactions": save_csv(
-            processor_transactions, "processor_transactions.csv"
+            processor_transactions,
+            "processor_transactions.csv",
+        ),
+        "Airbnb sequence diagnostics": save_csv(
+            airbnb_sequence_diagnostics,
+            "airbnb_sequence_diagnostics.csv",
+        ),
+        "Airbnb sequence summary": save_csv(
+            airbnb_sequence_summary,
+            "airbnb_sequence_summary.csv",
         ),
         "Payment ledger": save_csv(
-            payment_ledger, "payment_ledger.csv"
+            payment_ledger,
+            "payment_ledger.csv",
         ),
         "Payout ledger": save_csv(
-            payout_ledger, "payout_ledger.csv"
+            payout_ledger,
+            "payout_ledger.csv",
         ),
         "Bank transactions": save_csv(
-            bank_transactions, "bank_transactions.csv"
+            bank_transactions,
+            "bank_transactions.csv",
         ),
         "QuickBooks inventory": save_csv(
-            quickbooks_inventory, "quickbooks_inventory.csv"
+            quickbooks_inventory,
+            "quickbooks_inventory.csv",
         ),
         "QuickBooks GL": save_csv(
-            quickbooks_gl, "quickbooks_gl.csv"
+            quickbooks_gl,
+            "quickbooks_gl.csv",
         ),
         "QuickBooks posting batches": save_csv(
-            quickbooks_batches, "quickbooks_posting_batches.csv"
+            quickbooks_batches,
+            "quickbooks_posting_batches.csv",
         ),
-        "Reservation matches": save_csv(matches, "matches.csv"),
+        "Reservation matches": save_csv(
+            matches,
+            "matches.csv",
+        ),
         "Reconciliation": save_csv(
-            reconciliation, "reconciliation.csv"
+            reconciliation,
+            "reconciliation.csv",
         ),
         "Posting status": save_csv(
-            posting_status, "posting_status.csv"
+            posting_status,
+            "posting_status.csv",
         ),
     }
 
     if not cognito_renewals.empty:
         outputs["Cognito renewals"] = save_csv(
-            cognito_renewals, "cognito_renewals.csv"
+            cognito_renewals,
+            "cognito_renewals.csv",
         )
         outputs["Legacy payment matches"] = save_csv(
-            legacy_payment_matches, "legacy_payment_matches.csv"
+            legacy_payment_matches,
+            "legacy_payment_matches.csv",
         )
 
     print("Generated outputs")
     print("-" * 40)
+
     for label, path in outputs.items():
         rows = len(pd.read_csv(path))
         print(f"{label:<30} {rows:>6} rows  {path.name}")
 
     print()
+    print("Airbnb sequence summary")
+    print("-" * 40)
+    print(
+        f"Balanced groups:   "
+        f"{int(airbnb_sequence_summary['balanced'].sum()):>6}"
+    )
+    print(
+        f"Unbalanced groups: "
+        f"{int((~airbnb_sequence_summary['balanced']).sum()):>6}"
+    )
+
+    print()
     print("QuickBooks posting summary")
     print("-" * 40)
+
     for status, count in (
         posting_status["posting_status"]
         .value_counts(dropna=False)
@@ -249,6 +309,7 @@ def main() -> int:
         print()
         print("Legacy Cognito matching summary")
         print("-" * 40)
+
         for status, count in (
             legacy_payment_matches["match_status"]
             .value_counts(dropna=False)
@@ -260,7 +321,10 @@ def main() -> int:
     print()
     print(f"Source inventory:\n{inventory_path}")
     print()
-    print("QuickBooks batch and Cognito reconciliation passed.")
+    print(
+        "QuickBooks batch, Cognito, and Airbnb sequence "
+        "reconciliation passed."
+    )
     return 0
 
 
