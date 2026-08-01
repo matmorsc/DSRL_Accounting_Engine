@@ -2,30 +2,67 @@ from __future__ import annotations
 
 import pandas as pd
 
-PAYMENT_TYPES = {"charge", "payment", "reservation", "refund", "adjustment"}
+
+PAYMENT_TYPES = {
+    "charge",
+    "payment",
+    "reservation",
+    "refund",
+    "adjustment",
+}
+
 PAYOUT_TYPES = {"payout"}
 
 
-def _require(frame: pd.DataFrame, required: set[str], label: str) -> None:
+def _require(
+    frame: pd.DataFrame,
+    required: set[str],
+    label: str,
+) -> None:
     missing = sorted(required.difference(frame.columns))
     if missing:
-        raise ValueError(f"{label} missing required columns: {missing}")
+        raise ValueError(
+            f"{label} missing required columns: {missing}"
+        )
+
+
+def _text(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none"} else text
 
 
 def build_payment_ledger(
     processor_transactions: pd.DataFrame,
 ) -> pd.DataFrame:
     required = {
-        "processor", "processor_account", "transaction_id",
-        "transaction_type", "source_id", "transaction_date",
-        "available_date", "gross_amount", "processor_fee",
-        "net_amount", "reservation_id",
-        "channel_reservation_id", "guest", "listing", "source_file",
+        "processor",
+        "processor_account",
+        "transaction_id",
+        "transaction_type",
+        "source_id",
+        "transaction_date",
+        "available_date",
+        "gross_amount",
+        "processor_fee",
+        "net_amount",
+        "reservation_id",
+        "channel_reservation_id",
+        "guest",
+        "listing",
+        "source_file",
     }
-    _require(processor_transactions, required, "Processor transactions")
+    _require(
+        processor_transactions,
+        required,
+        "Processor transactions",
+    )
 
     payments = processor_transactions.loc[
-        processor_transactions["transaction_type"].isin(PAYMENT_TYPES)
+        processor_transactions["transaction_type"].isin(
+            PAYMENT_TYPES
+        )
     ].copy()
 
     payments["payment_event_id"] = (
@@ -39,16 +76,35 @@ def build_payment_ledger(
     payments["payout_date"] = pd.NaT
 
     columns = [
-        "payment_event_id", "processor", "processor_account",
-        "transaction_id", "transaction_type", "source_id",
-        "transaction_date", "available_date", "gross_amount",
-        "processor_fee", "net_amount", "reservation_id",
-        "channel_reservation_id", "guest", "listing",
-        "payout_id", "payout_assignment_status",
-        "payout_assignment_method", "payout_date", "source_file",
+        "payment_event_id",
+        "processor",
+        "processor_account",
+        "transaction_id",
+        "transaction_type",
+        "source_id",
+        "transaction_date",
+        "available_date",
+        "gross_amount",
+        "processor_fee",
+        "net_amount",
+        "reservation_id",
+        "channel_reservation_id",
+        "guest",
+        "listing",
+        "payout_id",
+        "payout_assignment_status",
+        "payout_assignment_method",
+        "payout_date",
+        "source_file",
     ]
+
     return payments[columns].sort_values(
-        ["processor_account", "available_date", "transaction_date"],
+        [
+            "processor_account",
+            "available_date",
+            "transaction_date",
+            "transaction_id",
+        ],
         na_position="last",
     ).reset_index(drop=True)
 
@@ -57,21 +113,35 @@ def build_payout_ledger(
     processor_transactions: pd.DataFrame,
 ) -> pd.DataFrame:
     required = {
-        "processor", "processor_account", "transaction_id",
-        "transaction_type", "source_id", "transaction_date",
-        "net_amount", "source_file",
+        "processor",
+        "processor_account",
+        "transaction_id",
+        "transaction_type",
+        "source_id",
+        "transaction_date",
+        "net_amount",
+        "source_file",
     }
-    _require(processor_transactions, required, "Processor transactions")
+    _require(
+        processor_transactions,
+        required,
+        "Processor transactions",
+    )
 
     payouts = processor_transactions.loc[
-        processor_transactions["transaction_type"].isin(PAYOUT_TYPES)
+        processor_transactions["transaction_type"].isin(
+            PAYOUT_TYPES
+        )
     ].copy()
 
     payouts["payout_id"] = payouts["source_id"].where(
         payouts["source_id"].astype(str).str.strip().ne(""),
         payouts["transaction_id"],
     )
-    payouts["payout_amount"] = payouts["net_amount"].astype(float).abs()
+
+    payouts["payout_amount"] = (
+        payouts["net_amount"].astype(float).abs()
+    )
     payouts["assigned_event_count"] = 0
     payouts["assigned_event_net"] = 0.0
     payouts["allocation_difference"] = 0.0
@@ -84,17 +154,85 @@ def build_payout_ledger(
     payouts["bank_match_method"] = ""
 
     columns = [
-        "payout_id", "processor", "processor_account", "transaction_id",
-        "transaction_date", "payout_amount", "assigned_event_count",
-        "assigned_event_net", "allocation_difference",
-        "allocation_status", "bank_transaction_id",
-        "bank_transaction_date", "bank_amount", "bank_difference",
-        "bank_match_status", "bank_match_method", "source_file",
+        "payout_id",
+        "processor",
+        "processor_account",
+        "transaction_id",
+        "transaction_date",
+        "payout_amount",
+        "assigned_event_count",
+        "assigned_event_net",
+        "allocation_difference",
+        "allocation_status",
+        "bank_transaction_id",
+        "bank_transaction_date",
+        "bank_amount",
+        "bank_difference",
+        "bank_match_status",
+        "bank_match_method",
+        "source_file",
     ]
+
     return payouts[columns].sort_values(
-        ["processor_account", "transaction_date"],
+        [
+            "processor_account",
+            "transaction_date",
+            "payout_id",
+        ],
         na_position="last",
     ).reset_index(drop=True)
+
+
+def _assign_by_exact_reference(
+    output: pd.DataFrame,
+    payouts: pd.DataFrame,
+) -> set[int]:
+    """
+    Airbnb transaction-history exports commonly carry the payout reference
+    (for example G-...) on each reservation event. When that reference equals
+    a known payout ID, it is stronger than date-based assignment.
+    """
+    assigned_indices: set[int] = set()
+
+    payout_lookup = {
+        (
+            _text(row.get("processor_account")),
+            _text(row.get("payout_id")),
+        ): row
+        for _, row in payouts.iterrows()
+        if _text(row.get("payout_id"))
+    }
+
+    for idx, event in output.iterrows():
+        source_id = _text(event.get("source_id"))
+        account = _text(event.get("processor_account"))
+
+        if not source_id:
+            continue
+
+        key = (account, source_id)
+        payout = payout_lookup.get(key)
+
+        if payout is None:
+            continue
+
+        output.at[idx, "payout_id"] = _text(
+            payout.get("payout_id")
+        )
+        output.at[
+            idx,
+            "payout_assignment_status",
+        ] = "Assigned"
+        output.at[
+            idx,
+            "payout_assignment_method",
+        ] = "Exact processor payout reference"
+        output.at[idx, "payout_date"] = payout.get(
+            "transaction_date"
+        )
+        assigned_indices.add(idx)
+
+    return assigned_indices
 
 
 def assign_payment_events_to_payouts(
@@ -103,7 +241,14 @@ def assign_payment_events_to_payouts(
 ) -> pd.DataFrame:
     output = payments.copy()
 
-    for account in sorted(output["processor_account"].dropna().unique()):
+    exact_reference_indices = _assign_by_exact_reference(
+        output,
+        payouts,
+    )
+
+    for account in sorted(
+        output["processor_account"].dropna().unique()
+    ):
         account_payouts = payouts.loc[
             payouts["processor_account"].eq(account)
         ].sort_values("transaction_date")
@@ -111,19 +256,33 @@ def assign_payment_events_to_payouts(
         if account_payouts.empty:
             continue
 
-        for idx in output.index[
+        account_indices = output.index[
             output["processor_account"].eq(account)
-        ]:
+        ]
+
+        for idx in account_indices:
+            if idx in exact_reference_indices:
+                continue
+
             available = pd.to_datetime(
-                output.at[idx, "available_date"], errors="coerce"
+                output.at[idx, "available_date"],
+                errors="coerce",
             )
             transaction_date = pd.to_datetime(
-                output.at[idx, "transaction_date"], errors="coerce"
+                output.at[idx, "transaction_date"],
+                errors="coerce",
             )
-            comparison = available if pd.notna(available) else transaction_date
+            comparison = (
+                available
+                if pd.notna(available)
+                else transaction_date
+            )
 
             if pd.isna(comparison):
-                output.at[idx, "payout_assignment_status"] = "Missing Event Date"
+                output.at[
+                    idx,
+                    "payout_assignment_status",
+                ] = "Missing Event Date"
                 continue
 
             candidates = account_payouts.loc[
@@ -135,16 +294,27 @@ def assign_payment_events_to_payouts(
             ]
 
             if candidates.empty:
-                output.at[idx, "payout_assignment_status"] = "Pending Future Payout"
+                output.at[
+                    idx,
+                    "payout_assignment_status",
+                ] = "Pending Future Payout"
                 continue
 
             selected = candidates.iloc[0]
-            output.at[idx, "payout_id"] = selected["payout_id"]
-            output.at[idx, "payout_assignment_status"] = "Assigned"
+            output.at[idx, "payout_id"] = selected[
+                "payout_id"
+            ]
             output.at[
-                idx, "payout_assignment_method"
+                idx,
+                "payout_assignment_status",
+            ] = "Assigned"
+            output.at[
+                idx,
+                "payout_assignment_method",
             ] = "First payout on or after available date"
-            output.at[idx, "payout_date"] = selected["transaction_date"]
+            output.at[idx, "payout_date"] = selected[
+                "transaction_date"
+            ]
 
     return output
 
@@ -169,30 +339,44 @@ def summarize_payout_allocations(
 
     output = payouts.drop(
         columns=[
-            "assigned_event_count", "assigned_event_net",
-            "allocation_difference", "allocation_status",
+            "assigned_event_count",
+            "assigned_event_net",
+            "allocation_difference",
+            "allocation_status",
         ],
         errors="ignore",
-    ).merge(summary, on="payout_id", how="left")
+    ).merge(
+        summary,
+        on="payout_id",
+        how="left",
+    )
 
     output["assigned_event_count"] = (
-        output["assigned_event_count"].fillna(0).astype(int)
+        output["assigned_event_count"]
+        .fillna(0)
+        .astype(int)
     )
     output["assigned_event_net"] = (
-        output["assigned_event_net"].fillna(0.0).round(2)
+        output["assigned_event_net"]
+        .fillna(0.0)
+        .round(2)
     )
     output["allocation_difference"] = (
-        output["assigned_event_net"] - output["payout_amount"]
+        output["assigned_event_net"]
+        - output["payout_amount"]
     ).round(2)
+
     output["allocation_status"] = "Difference"
     output.loc[
-        output["assigned_event_count"].eq(0), "allocation_status"
+        output["assigned_event_count"].eq(0),
+        "allocation_status",
     ] = "Unallocated"
     output.loc[
         output["assigned_event_count"].gt(0)
         & output["allocation_difference"].abs().le(0.02),
         "allocation_status",
     ] = "Fully Allocated"
+
     return output
 
 
@@ -207,7 +391,8 @@ def match_payouts_to_bank(
 
     for idx, payout in output.iterrows():
         payout_date = pd.to_datetime(
-            payout["transaction_date"], errors="coerce"
+            payout["transaction_date"],
+            errors="coerce",
         )
         if pd.isna(payout_date):
             continue
@@ -216,53 +401,78 @@ def match_payouts_to_bank(
             bank_transactions["amount"].astype(float).gt(0)
         ].copy()
 
-        processor = str(payout["processor"]).strip()
+        processor = _text(payout.get("processor"))
         if processor:
             processor_only = candidates.loc[
                 candidates["identified_processor"]
-                .astype(str).str.strip().eq(processor)
+                .astype(str)
+                .str.strip()
+                .eq(processor)
             ]
             if not processor_only.empty:
                 candidates = processor_only
 
         candidates = candidates.loc[
-            ~candidates["transaction_id"].astype(str).isin(used_bank_ids)
+            ~candidates["transaction_id"]
+            .astype(str)
+            .isin(used_bank_ids)
         ].copy()
 
         candidates["amount_difference"] = (
             candidates["amount"].astype(float)
             - float(payout["payout_amount"])
         ).abs()
+
         candidates["date_difference_days"] = (
             pd.to_datetime(
-                candidates["transaction_date"], errors="coerce"
+                candidates["transaction_date"],
+                errors="coerce",
             ).dt.normalize()
             - payout_date.normalize()
         ).dt.days.abs()
 
         exact = candidates.loc[
-            candidates["amount_difference"].le(amount_tolerance)
-            & candidates["date_difference_days"].le(date_tolerance_days)
+            candidates["amount_difference"].le(
+                amount_tolerance
+            )
+            & candidates["date_difference_days"].le(
+                date_tolerance_days
+            )
         ].sort_values(
-            ["date_difference_days", "amount_difference", "transaction_date"]
+            [
+                "date_difference_days",
+                "amount_difference",
+                "transaction_date",
+            ]
         )
 
         if exact.empty:
             continue
 
         selected = exact.iloc[0]
-        bank_id = str(selected["transaction_id"]).strip()
+        bank_id = _text(selected.get("transaction_id"))
         used_bank_ids.add(bank_id)
 
         output.at[idx, "bank_transaction_id"] = bank_id
-        output.at[idx, "bank_transaction_date"] = selected["transaction_date"]
-        output.at[idx, "bank_amount"] = float(selected["amount"])
-        output.at[idx, "bank_difference"] = round(
-            float(selected["amount"]) - float(payout["payout_amount"]), 2
-        )
-        output.at[idx, "bank_match_status"] = "Matched"
         output.at[
-            idx, "bank_match_method"
+            idx,
+            "bank_transaction_date",
+        ] = selected["transaction_date"]
+        output.at[idx, "bank_amount"] = float(
+            selected["amount"]
+        )
+        output.at[idx, "bank_difference"] = round(
+            float(selected["amount"])
+            - float(payout["payout_amount"]),
+            2,
+        )
+        output.at[
+            idx,
+            "bank_match_status",
+        ] = "Matched"
+        output.at[
+            idx,
+            "bank_match_method",
         ] = "Exact amount within date tolerance"
 
     return output
@@ -275,8 +485,14 @@ def build_payout_reconciliation(
     date_tolerance_days: int = 5,
     amount_tolerance: float = 0.02,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    assigned = assign_payment_events_to_payouts(payments, payouts)
-    allocated = summarize_payout_allocations(assigned, payouts)
+    assigned = assign_payment_events_to_payouts(
+        payments,
+        payouts,
+    )
+    allocated = summarize_payout_allocations(
+        assigned,
+        payouts,
+    )
     matched = match_payouts_to_bank(
         allocated,
         bank_transactions,
