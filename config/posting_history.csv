@@ -1,0 +1,1 @@
+posting_line_id,posting_group_id,payment_event_id,processor,processor_account,transaction_id,transaction_type,transaction_date,source_id,payout_id,reservation_id,channel_reservation_id,guest,listing,account,class,description,signed_amount,posting_type,reversal_of_posting_line_id,classification_source,created_by,created_at,status,notes
