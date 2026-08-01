@@ -1,135 +1,34 @@
 from __future__ import annotations
 
-import csv
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 import yaml
 
+from src.importers.discovery import discover_sources
+from src.importers.normalize import (
+    normalize_airbnb,
+    normalize_bank,
+    normalize_guesty,
+    normalize_quickbooks_inventory,
+    normalize_stripe,
+)
+from src.reports.inventory import write_source_inventory
+
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config" / "settings.yaml"
+PROCESSED_DIR = ROOT / "data" / "processed"
 OUTPUT_DIR = ROOT / "output"
 
-SOURCE_FOLDERS = {
-    "Guesty": ROOT / "data" / "raw" / "guesty",
-    "Stripe Main": ROOT / "data" / "raw" / "stripe" / "main",
-    "Stripe Cognito": ROOT / "data" / "raw" / "stripe" / "cognito",
-    "Stripe Keycheck": ROOT / "data" / "raw" / "stripe" / "keycheck",
-    "Airbnb": ROOT / "data" / "raw" / "airbnb",
-    "Bank": ROOT / "data" / "raw" / "bank",
-    "QuickBooks": ROOT / "data" / "raw" / "quickbooks",
-}
 
-REQUIRED_COLUMNS = {
-    "Guesty": {
-        "GUEST",
-        "LISTING'S NICKNAME",
-        "CONFIRMATION DATE",
-        "CHECK-IN",
-        "CHECK-OUT",
-        "SOURCE",
-        "PAYMENT METHOD",
-        "TOTAL PAID",
-        "TOTAL REFUNDED",
-        "CHANNEL RESERVATION ID",
-        "RESERVATION ID",
-    },
-    "Stripe Main": {
-        "id",
-        "Type",
-        "Source",
-        "Amount",
-        "Fee",
-        "Net",
-        "Created (UTC)",
-        "Available On (UTC)",
-    },
-    "Stripe Cognito": {
-        "id",
-        "Type",
-        "Source",
-        "Amount",
-        "Fee",
-        "Net",
-        "Created (UTC)",
-        "Available On (UTC)",
-    },
-    "Stripe Keycheck": {
-        "id",
-        "Type",
-        "Source",
-        "Amount",
-        "Fee",
-        "Net",
-        "Created (UTC)",
-        "Available On (UTC)",
-    },
-    "Airbnb": {
-        "Date",
-        "Type",
-        "Confirmation code",
-        "Guest",
-        "Listing",
-        "Amount",
-        "Paid out",
-        "Gross earnings",
-        "Airbnb remitted tax",
-    },
-    "Bank": {
-        "Transaction ID",
-        "Date",
-        "Description",
-        "Amount",
-        "Balance",
-    },
-}
-
-
-def newest_data_file(folder: Path) -> Path | None:
-    candidates = [
-        path
-        for path in folder.iterdir()
-        if path.is_file()
-        and path.name.lower() != "readme.md"
-        and path.suffix.lower() in {".csv", ".xlsx", ".xls"}
-    ]
-
-    if not candidates:
-        return None
-
-    return max(candidates, key=lambda path: path.stat().st_mtime)
-
-
-def read_headers(path: Path) -> list[str]:
-    if path.suffix.lower() == ".csv":
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.reader(handle)
-            return next(reader)
-
-    frame = pd.read_excel(path, nrows=0)
-    return list(frame.columns)
-
-
-def row_count(path: Path) -> int:
-    if path.suffix.lower() == ".csv":
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            return max(sum(1 for _ in handle) - 1, 0)
-
-    return len(pd.read_excel(path))
-
-
-def validate_columns(source_name: str, headers: Iterable[str]) -> list[str]:
-    required = REQUIRED_COLUMNS.get(source_name)
-
-    if not required:
-        return []
-
-    header_set = set(headers)
-    return sorted(required.difference(header_set))
+def save_csv(frame: pd.DataFrame, filename: str) -> Path:
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    path = PROCESSED_DIR / filename
+    frame.to_csv(path, index=False)
+    return path
 
 
 def main() -> int:
@@ -146,73 +45,84 @@ def main() -> int:
     print(f"Business: {settings['business']['name']}")
     print()
 
-    inventory_rows: list[dict[str, object]] = []
-    errors: list[str] = []
-
-    for source_name, folder in SOURCE_FOLDERS.items():
-        if not folder.exists():
-            errors.append(f"{source_name}: folder does not exist: {folder}")
-            continue
-
-        path = newest_data_file(folder)
-
-        if path is None:
-            errors.append(f"{source_name}: no data file found")
-            continue
-
-        try:
-            headers = read_headers(path)
-            count = row_count(path)
-            missing = validate_columns(source_name, headers)
-
-            status = "Valid" if not missing else "Missing columns"
-
-            inventory_rows.append(
-                {
-                    "source": source_name,
-                    "file": path.name,
-                    "full_path": str(path),
-                    "rows": count,
-                    "modified": datetime.fromtimestamp(
-                        path.stat().st_mtime
-                    ).isoformat(timespec="seconds"),
-                    "status": status,
-                    "missing_columns": ", ".join(missing),
-                }
-            )
-
-            print(f"{source_name:<18} {count:>6} rows  {path.name}")
-
-            if missing:
-                errors.append(
-                    f"{source_name}: missing required columns: {', '.join(missing)}"
-                )
-
-        except Exception as exc:
-            errors.append(f"{source_name}: could not read {path.name}: {exc}")
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    output_path = OUTPUT_DIR / f"source_inventory_{timestamp}.csv"
-
-    pd.DataFrame(inventory_rows).to_csv(output_path, index=False)
-
-    print()
-    print(f"Inventory saved to:\n{output_path}")
-
-    if errors:
-        print()
-        print("VALIDATION ISSUES")
-        print("-" * 40)
-
-        for error in errors:
-            print(f"- {error}")
-
+    try:
+        sources = discover_sources(ROOT)
+    except Exception as exc:
+        print(f"ERROR: Source discovery failed: {exc}")
         return 1
 
+    inventory_path = write_source_inventory(
+        sources=sources,
+        output_dir=OUTPUT_DIR,
+    )
+
+    try:
+        reservations = normalize_guesty(
+            sources["Guesty"][0],
+            monthly_threshold=int(
+                settings["classification"]["monthly_night_threshold"]
+            ),
+            income_accounts=settings["income_accounts"],
+        )
+
+        stripe_frames = []
+        for account_name, source_key in [
+            ("Main Guesty", "Stripe Main"),
+            ("Legacy Cognito", "Stripe Cognito"),
+            ("Legacy Keycheck", "Stripe Keycheck"),
+        ]:
+            stripe_frames.append(
+                normalize_stripe(
+                    sources[source_key][0],
+                    account_name=account_name,
+                )
+            )
+
+        processor_transactions = pd.concat(
+            [
+                *stripe_frames,
+                normalize_airbnb(sources["Airbnb"][0]),
+            ],
+            ignore_index=True,
+        )
+
+        bank_transactions = normalize_bank(sources["Bank"][0])
+
+        quickbooks_inventory = normalize_quickbooks_inventory(
+            sources["QuickBooks"]
+        )
+
+    except Exception as exc:
+        print(f"ERROR: Normalization failed: {exc}")
+        return 1
+
+    outputs = {
+        "Reservations": save_csv(reservations, "reservations.csv"),
+        "Processor transactions": save_csv(
+            processor_transactions,
+            "processor_transactions.csv",
+        ),
+        "Bank transactions": save_csv(
+            bank_transactions,
+            "bank_transactions.csv",
+        ),
+        "QuickBooks inventory": save_csv(
+            quickbooks_inventory,
+            "quickbooks_inventory.csv",
+        ),
+    }
+
+    print("Normalized outputs")
+    print("-" * 40)
+
+    for label, path in outputs.items():
+        rows = len(pd.read_csv(path))
+        print(f"{label:<26} {rows:>6} rows  {path.name}")
+
     print()
-    print("Validation passed.")
+    print(f"Source inventory:\n{inventory_path}")
+    print()
+    print("Normalization passed.")
     return 0
 
 
