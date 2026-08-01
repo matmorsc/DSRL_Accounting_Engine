@@ -22,3 +22,8 @@ matching:
   bank_date_tolerance_days: 5
   amount_tolerance: 0.02
   allow_fuzzy_matching: false
+
+quickbooks:
+  assume_posted_through: 2026-05-15
+  posting_date_tolerance_days: 5
+  amount_tolerance: 0.02

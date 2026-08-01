@@ -14,7 +14,9 @@ from src.importers.normalize import (
     normalize_quickbooks_inventory,
     normalize_stripe,
 )
+from src.importers.quickbooks import normalize_quickbooks_gl
 from src.matching.engine import build_matches
+from src.posting.engine import build_posting_status
 from src.reconciliation.engine import build_reconciliation
 from src.reconciliation.payouts import (
     build_payment_ledger,
@@ -26,6 +28,7 @@ from src.reports.inventory import write_source_inventory
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config" / "settings.yaml"
 OVERRIDES_PATH = ROOT / "config" / "manual_overrides.csv"
+POSTING_OVERRIDES_PATH = ROOT / "config" / "posting_overrides.csv"
 PROCESSED_DIR = ROOT / "data" / "processed"
 OUTPUT_DIR = ROOT / "output"
 
@@ -87,6 +90,9 @@ def main() -> int:
         quickbooks_inventory = normalize_quickbooks_inventory(
             sources["QuickBooks"]
         )
+        quickbooks_gl = normalize_quickbooks_gl(
+            sources["QuickBooks"]
+        )
 
         matches = build_matches(
             reservations=reservations,
@@ -129,6 +135,23 @@ def main() -> int:
             ),
         )
 
+        posting_status = build_posting_status(
+            payout_ledger=payout_ledger,
+            quickbooks_gl=quickbooks_gl,
+            posting_overrides_path=POSTING_OVERRIDES_PATH,
+            assume_posted_through=settings["quickbooks"][
+                "assume_posted_through"
+            ],
+            date_tolerance_days=int(
+                settings["quickbooks"][
+                    "posting_date_tolerance_days"
+                ]
+            ),
+            amount_tolerance=float(
+                settings["quickbooks"]["amount_tolerance"]
+            ),
+        )
+
     except Exception as exc:
         print(f"ERROR: Processing failed: {exc}")
         return 1
@@ -150,9 +173,15 @@ def main() -> int:
         "QuickBooks inventory": save_csv(
             quickbooks_inventory, "quickbooks_inventory.csv"
         ),
+        "QuickBooks GL": save_csv(
+            quickbooks_gl, "quickbooks_gl.csv"
+        ),
         "Reservation matches": save_csv(matches, "matches.csv"),
         "Reconciliation": save_csv(
             reconciliation, "reconciliation.csv"
+        ),
+        "Posting status": save_csv(
+            posting_status, "posting_status.csv"
         ),
     }
 
@@ -163,10 +192,10 @@ def main() -> int:
         print(f"{label:<26} {rows:>6} rows  {path.name}")
 
     print()
-    print("Lifecycle summary")
+    print("QuickBooks posting summary")
     print("-" * 40)
     for status, count in (
-        reconciliation["lifecycle_status"]
+        posting_status["posting_status"]
         .value_counts(dropna=False)
         .sort_index()
         .items()
@@ -174,10 +203,10 @@ def main() -> int:
         print(f"{status:<38} {count:>6}")
 
     print()
-    print("Review queue")
+    print("Eligible for draft journal entries")
     print("-" * 40)
     print(
-        reconciliation["review_required"]
+        posting_status["generate_entry"]
         .value_counts(dropna=False)
         .sort_index()
         .to_string()
@@ -186,7 +215,7 @@ def main() -> int:
     print()
     print(f"Source inventory:\n{inventory_path}")
     print()
-    print("Lifecycle reconciliation passed.")
+    print("Posting-control reconciliation passed.")
     return 0
 
 

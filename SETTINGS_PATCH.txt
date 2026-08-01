@@ -1,0 +1,6 @@
+# Add this section to config/settings.yaml if it is not already present:
+
+quickbooks:
+  assume_posted_through: 2026-05-15
+  posting_date_tolerance_days: 5
+  amount_tolerance: 0.02
