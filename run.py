@@ -15,11 +15,13 @@ from src.importers.normalize import (
     normalize_stripe,
 )
 from src.matching.engine import build_matches
+from src.reconciliation.engine import build_reconciliation
 from src.reports.inventory import write_source_inventory
 
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config" / "settings.yaml"
+OVERRIDES_PATH = ROOT / "config" / "manual_overrides.csv"
 PROCESSED_DIR = ROOT / "data" / "processed"
 OUTPUT_DIR = ROOT / "output"
 
@@ -95,6 +97,17 @@ def main() -> int:
             ),
         )
 
+        reconciliation = build_reconciliation(
+            reservations=reservations,
+            matches=matches,
+            processor_transactions=processor_transactions,
+            overrides_path=OVERRIDES_PATH,
+            acquisition_date=settings["business"]["acquisition_date"],
+            amount_tolerance=float(
+                settings["matching"]["amount_tolerance"]
+            ),
+        )
+
     except Exception as exc:
         print(f"ERROR: Processing failed: {exc}")
         return 1
@@ -114,9 +127,13 @@ def main() -> int:
             "quickbooks_inventory.csv",
         ),
         "Reservation matches": save_csv(matches, "matches.csv"),
+        "Reconciliation": save_csv(
+            reconciliation,
+            "reconciliation.csv",
+        ),
     }
 
-    print("Normalized outputs")
+    print("Generated outputs")
     print("-" * 40)
 
     for label, path in outputs.items():
@@ -124,22 +141,22 @@ def main() -> int:
         print(f"{label:<26} {rows:>6} rows  {path.name}")
 
     print()
-    print("Match summary")
+    print("Reconciliation summary")
     print("-" * 40)
 
     summary = (
-        matches["match_status"]
+        reconciliation["reconciliation_status"]
         .value_counts(dropna=False)
         .sort_index()
     )
 
     for status, count in summary.items():
-        print(f"{status:<34} {count:>6}")
+        print(f"{status:<38} {count:>6}")
 
     print()
     print(f"Source inventory:\n{inventory_path}")
     print()
-    print("Matching passed.")
+    print("Reconciliation passed.")
     return 0
 
 
