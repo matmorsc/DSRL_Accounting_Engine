@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -15,6 +14,7 @@ from src.importers.normalize import (
     normalize_quickbooks_inventory,
     normalize_stripe,
 )
+from src.matching.engine import build_matches
 from src.reports.inventory import write_source_inventory
 
 
@@ -47,16 +47,11 @@ def main() -> int:
 
     try:
         sources = discover_sources(ROOT)
-    except Exception as exc:
-        print(f"ERROR: Source discovery failed: {exc}")
-        return 1
+        inventory_path = write_source_inventory(
+            sources=sources,
+            output_dir=OUTPUT_DIR,
+        )
 
-    inventory_path = write_source_inventory(
-        sources=sources,
-        output_dir=OUTPUT_DIR,
-    )
-
-    try:
         reservations = normalize_guesty(
             sources["Guesty"][0],
             monthly_threshold=int(
@@ -92,8 +87,16 @@ def main() -> int:
             sources["QuickBooks"]
         )
 
+        matches = build_matches(
+            reservations=reservations,
+            processor_transactions=processor_transactions,
+            amount_tolerance=float(
+                settings["matching"]["amount_tolerance"]
+            ),
+        )
+
     except Exception as exc:
-        print(f"ERROR: Normalization failed: {exc}")
+        print(f"ERROR: Processing failed: {exc}")
         return 1
 
     outputs = {
@@ -110,6 +113,7 @@ def main() -> int:
             quickbooks_inventory,
             "quickbooks_inventory.csv",
         ),
+        "Reservation matches": save_csv(matches, "matches.csv"),
     }
 
     print("Normalized outputs")
@@ -120,9 +124,22 @@ def main() -> int:
         print(f"{label:<26} {rows:>6} rows  {path.name}")
 
     print()
+    print("Match summary")
+    print("-" * 40)
+
+    summary = (
+        matches["match_status"]
+        .value_counts(dropna=False)
+        .sort_index()
+    )
+
+    for status, count in summary.items():
+        print(f"{status:<34} {count:>6}")
+
+    print()
     print(f"Source inventory:\n{inventory_path}")
     print()
-    print("Normalization passed.")
+    print("Matching passed.")
     return 0
 
 
