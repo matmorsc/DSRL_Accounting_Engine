@@ -1,23 +1,26 @@
-# DSRL Accounting Engine
+# DSRL Direct Internal Hyperlink Fix
 
-Permanent home for the Dark Sky River Lodge reconciliation and accounting system.
+Extract this update directly into the project folder.
 
-## Windows setup
+It replaces:
 
-1. Unzip this folder into Documents.
-2. Open the folder in VS Code.
-3. Open PowerShell in the project folder.
-4. Run: `py -m venv .venv`
-5. Run: `.\.venv\Scripts\Activate.ps1`
-6. Run: `pip install -r requirements.txt`
-7. Run: `python run.py`
+- `src/presentation/posting_workbook.py`
+- `tests/test_internal_hyperlinks_v10.py`
 
-## Monthly workflow
+Do not run:
 
-Save new exports in the matching `data/raw` folders using dated filenames.
-Never overwrite or edit raw exports. Generated reports belong in `output`.
+```powershell
+python patch_posting_workbook_hyperlinks.py
+```
 
-## Current next milestone
+That obsolete patch script can be deleted.
 
-Implement V4 using structured overrides, expected-timing statuses, refund linking,
-reservation modifications, pre-acquisition exclusions, and a rebuilt exception queue.
+Run:
+
+```powershell
+python -m pytest
+python build_quickbooks_posting_package_v10.py
+```
+
+Then reopen the regenerated workbook. The navigation links should work without
+Excel reporting repaired XML records.
