@@ -79,6 +79,7 @@ def build_deposit_drafts_v2(
     payout_ledger: pd.DataFrame,
     allocations: pd.DataFrame,
     rules: dict[str, Any],
+    payout_adjustments: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     _require(
         posting_status,
@@ -97,6 +98,20 @@ def build_deposit_drafts_v2(
     )
 
     tolerance = float(rules.get("amount_tolerance", 0.02))
+
+    if payout_adjustments is None:
+        payout_adjustments = pd.DataFrame(
+            columns=[
+                "payout_id",
+                "adjustment_type",
+                "amount",
+                "account",
+                "class",
+                "description",
+                "status",
+                "notes",
+            ]
+        )
 
     eligible = posting_status.loc[
         posting_status["generate_entry"]
@@ -157,10 +172,16 @@ def build_deposit_drafts_v2(
             grouped["amount"].abs().ge(0.005)
         ].reset_index(drop=True)
 
-        for line_number, (_, line) in enumerate(
-            grouped.iterrows(),
-            start=1,
-        ):
+        adjustment_rows = payout_adjustments.loc[
+            payout_adjustments["payout_id"]
+            .astype(str)
+            .str.strip()
+            .eq(payout_id)
+        ].copy()
+
+        line_number = 1
+
+        for _, line in grouped.iterrows():
             line_rows.append(
                 {
                     "payout_id": payout_id,
@@ -185,17 +206,71 @@ def build_deposit_drafts_v2(
                             0,
                         )
                     ),
+                    "override_source": "",
                 }
             )
+            line_number += 1
+
+        for _, adjustment in adjustment_rows.iterrows():
+            line_rows.append(
+                {
+                    "payout_id": payout_id,
+                    "line_number": line_number,
+                    "line_type": (
+                        "Manual Adjustment: "
+                        + _text(
+                            adjustment.get(
+                                "adjustment_type"
+                            )
+                        )
+                    ),
+                    "account": _text(
+                        adjustment.get("account")
+                    ),
+                    "description": _text(
+                        adjustment.get("description")
+                    ),
+                    "amount": _money(
+                        adjustment.get("amount")
+                    ),
+                    "class": _text(
+                        adjustment.get("class")
+                    ),
+                    "source_event_count": 0,
+                    "source_reservation_count": 0,
+                    "override_source": (
+                        "config/payout_adjustments.csv"
+                    ),
+                }
+            )
+            line_number += 1
 
         bank_amount = _money(
             payout.get("bank_amount")
             or payout.get("payout_amount")
         )
-        draft_total = round(
+
+        allocation_total = round(
             grouped["amount"].sum()
             if not grouped.empty
             else 0.0,
+            2,
+        )
+        adjustment_total = round(
+            pd.to_numeric(
+                adjustment_rows.get(
+                    "amount",
+                    pd.Series(dtype=float),
+                ),
+                errors="coerce",
+            )
+            .fillna(0.0)
+            .sum(),
+            2,
+        )
+
+        draft_total = round(
+            allocation_total + adjustment_total,
             2,
         )
         difference = round(draft_total - bank_amount, 2)
@@ -217,11 +292,27 @@ def build_deposit_drafts_v2(
             .sum()
         ) if not grouped.empty else 0
 
+        if not adjustment_rows.empty:
+            missing_account_lines += int(
+                adjustment_rows["account"]
+                .astype(str)
+                .str.strip()
+                .eq("")
+                .sum()
+            )
+            missing_class_lines += int(
+                adjustment_rows["class"]
+                .astype(str)
+                .str.strip()
+                .eq("")
+                .sum()
+            )
+
         reasons: list[str] = []
 
-        if grouped.empty:
+        if grouped.empty and adjustment_rows.empty:
             reasons.append(
-                "No payment allocations were available for this payout."
+                "No payment allocations or adjustments were available for this payout."
             )
         if missing_account_lines:
             reasons.append(
@@ -253,6 +344,8 @@ def build_deposit_drafts_v2(
                     payout.get("bank_transaction_id")
                 ),
                 "bank_amount": bank_amount,
+                "allocation_total": allocation_total,
+                "manual_adjustment_total": adjustment_total,
                 "draft_total": draft_total,
                 "difference": difference,
                 "balanced": "Yes" if balanced else "No",
@@ -262,7 +355,7 @@ def build_deposit_drafts_v2(
                     else "Review Required"
                 ),
                 "review_reason": " ".join(reasons),
-                "line_count": len(grouped),
+                "line_count": len(grouped) + len(adjustment_rows),
                 "source_event_count": int(
                     payout_allocations[
                         "payment_event_id"
@@ -272,6 +365,9 @@ def build_deposit_drafts_v2(
                     payout_allocations[
                         "reservation_id"
                     ].nunique()
+                ),
+                "manual_adjustment_count": len(
+                    adjustment_rows
                 ),
                 "posting_status": _text(
                     posting.get("posting_status")
@@ -286,6 +382,8 @@ def build_deposit_drafts_v2(
         "deposit_date",
         "bank_transaction_id",
         "bank_amount",
+        "allocation_total",
+        "manual_adjustment_total",
         "draft_total",
         "difference",
         "balanced",
@@ -294,6 +392,7 @@ def build_deposit_drafts_v2(
         "line_count",
         "source_event_count",
         "source_reservation_count",
+        "manual_adjustment_count",
         "posting_status",
     ]
 
@@ -307,6 +406,7 @@ def build_deposit_drafts_v2(
         "class",
         "source_event_count",
         "source_reservation_count",
+        "override_source",
     ]
 
     return (

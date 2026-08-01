@@ -8,11 +8,22 @@ import yaml
 
 from src.posting.payment_allocations import build_payment_allocations
 from src.posting.deposit_drafts_v2 import build_deposit_drafts_v2
+from src.review.overrides import (
+    apply_manual_payment_matches,
+    read_manual_payment_matches,
+    read_payout_adjustments,
+)
 
 
 ROOT = Path(__file__).resolve().parent
 PROCESSED = ROOT / "data" / "processed"
 CONFIG = ROOT / "config" / "deposit_draft_rules.yaml"
+PAYMENT_MATCHES = (
+    ROOT / "config" / "manual_payment_matches.csv"
+)
+PAYOUT_ADJUSTMENTS = (
+    ROOT / "config" / "payout_adjustments.csv"
+)
 
 
 def read_csv(name: str) -> pd.DataFrame:
@@ -32,8 +43,13 @@ def main() -> int:
         with CONFIG.open("r", encoding="utf-8") as handle:
             rules = yaml.safe_load(handle)
 
+        payment_ledger = apply_manual_payment_matches(
+            read_csv("payment_ledger.csv"),
+            read_manual_payment_matches(PAYMENT_MATCHES),
+        )
+
         allocations, diagnostics = build_payment_allocations(
-            payment_ledger=read_csv("payment_ledger.csv"),
+            payment_ledger=payment_ledger,
             reservations=read_csv("reservations.csv"),
             rules=rules,
         )
@@ -43,9 +59,13 @@ def main() -> int:
             payout_ledger=read_csv("payout_ledger.csv"),
             allocations=allocations,
             rules=rules,
+            payout_adjustments=read_payout_adjustments(
+                PAYOUT_ADJUSTMENTS
+            ),
         )
 
         outputs = {
+            "payment_ledger_reviewed.csv": payment_ledger,
             "payment_allocations.csv": allocations,
             "payment_allocation_diagnostics.csv": diagnostics,
             "deposit_drafts_v2.csv": summaries,
@@ -87,7 +107,6 @@ def main() -> int:
         )
 
     print()
-    print("Comparison files were created. Existing draft files were not replaced.")
     print("No QuickBooks transactions were created.")
     return 0
 
