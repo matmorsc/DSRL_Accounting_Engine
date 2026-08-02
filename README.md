@@ -1,26 +1,28 @@
-# DSRL Direct Internal Hyperlink Fix
+# DSRL Phase 11C — Canceled Reservation Reconstruction
 
-Extract this update directly into the project folder.
+## Replaces
 
-It replaces:
+- `src/review/stripe_seed_candidates.py`
+- `build_stripe_seed_candidates_v11.py`
+- `tests/test_stripe_seed_candidates_v11.py`
 
-- `src/presentation/posting_workbook.py`
-- `tests/test_internal_hyperlinks_v10.py`
+## Adds
 
-Do not run:
+- `tests/test_canceled_reservation_reconstruction_v11.py`
+- `docs/CANCELED_RESERVATION_RECONSTRUCTION_V11_PHASE_11C.md`
 
-```powershell
-python patch_posting_workbook_hyperlinks.py
-```
-
-That obsolete patch script can be deleted.
-
-Run:
+## Run
 
 ```powershell
 python -m pytest
-python build_quickbooks_posting_package_v10.py
+python build_stripe_seed_candidates_v11.py
 ```
 
-Then reopen the regenerated workbook. The navigation links should work without
-Excel reporting repaired XML records.
+Expected real-data behavior:
+
+- Paul Weissmann: approval-eligible Booking.com reconstruction.
+- Randal Jewell: approval-eligible VRBO 5.4% tax reconstruction.
+- Johnathon Zawadzki: remains Not Eligible.
+- unnamed large charge: remains Missing Reservation.
+
+No candidates are promoted and no posting history is modified.
