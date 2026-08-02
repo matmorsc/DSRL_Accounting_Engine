@@ -779,6 +779,15 @@ def build_stripe_seed_candidates(
             2,
         )
 
+        reservation_component_total = _money(
+            components.get("total")
+        )
+
+        gross_component_difference = round(
+            reservation_component_total - charge_gross,
+             2,
+        )
+
         diagnostic_rows.append(
             {
                 "candidate_group_id": candidate_group_id,
@@ -798,10 +807,11 @@ def build_stripe_seed_candidates(
                 "reservation_state_tax": components["state_tax"],
                 "reservation_county_tax": components["county_tax"],
                 "reservation_local_tax": components["local_tax"],
-                "reservation_component_total": components["total"],
+                "reservation_component_total": reservation_component_total,
                 "reservation_total_paid": components["total_paid"],
                 "reservation_total_refunded": components["total_refunded"],
                 "reservation_total_payout": components["total_payout"],
+                "gross_component_difference": gross_component_difference,
                 "gross_evidence_amount": evidence_amount,
                 "gross_evidence_match": evidence_match,
                 "allocation_method": allocation_method,
@@ -810,8 +820,8 @@ def build_stripe_seed_candidates(
                 "reconstructed_tax_2_9": reconstructed_tax_2_9,
                 "reconstructed_tax_2_5": reconstructed_tax_2_5,
                 "reconstructed_gross": reconstructed_gross,
-                "gross_component_difference": round(
-                    reconstructed_gross - charge_gross,
+                "reservation_gross_component_difference": round(
+                    components["total"] - charge_gross,
                     2,
                 ),
                 "candidate_status": candidate_status,

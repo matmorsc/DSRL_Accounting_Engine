@@ -1,0 +1,3 @@
+candidate_group_id,payment_event_id,source_id,payout_id,gross_amount,processor_fee,net_amount,linked_reservation_id,linked_guest,approval_eligible,approval_status,review_notes
+disputegrp_2161cdb14eade584f3aaf1a2,Legacy Cognito::txn_1Slgc2GdjxJTmdATfTSZrB1c,du_1SlgbpGdjxJTmdATarnz1W2y,po_1SmNjvGdjxJTmdATjXThD2KZ,-300,15,-315,,,Yes,Pending,Enter the linked reservation ID and guest before approval.
+disputegrp_3517c7af1293af19c738998d,Main Guesty::txn_1TsrjVJtejknM735qxdMJRRJ,du_1TsrhTJtejknM735Pd1MQbHu,po_1TtGgMJtejknM735PQ0D9nCF,-95,15,-110,6a31ea3820bb4b0013d22b90,Paul Weissmann,Yes,Promoted,Enter the linked reservation ID and guest before approval.

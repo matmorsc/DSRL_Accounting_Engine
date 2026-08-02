@@ -1,0 +1,7 @@
+composite_group_id,allocation_line_id,reservation_id,channel_reservation_id,guest,listing,account,class,description,signed_amount
+wedding_party_20260703,room5,,,,DSRL Lodge Room 5,Motel Rent - Short Term,Hospitality,Wedding party - Room 5 (Emma & Sam),450
+wedding_party_20260703,room7,,,,DSRL Lodge Room 7,Motel Rent - Short Term,Hospitality,Wedding party - Room 7 (Bolivars),360
+wedding_party_20260703,aframe,,,,DSRL A-Frame Cabin,Cabin Rent - Short-Term,Cabins,Wedding party - A-Frame Cabin,675
+wedding_party_20260703,state_tax,,,,,Sales & Lodging Taxes Payable,Hospitality,Wedding party - State lodging tax,37.13
+wedding_party_20260703,county_tax,,,,,Sales & Lodging Taxes Payable,Hospitality,Wedding party - Fremont County lodging tax,43.06
+wedding_party_20260703,stripe_fee,,,,,Bank Charges & Fees:Stripe Processing Fees,Hospitality,Wedding party - Stripe processing fee,-45.69

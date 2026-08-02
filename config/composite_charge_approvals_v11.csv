@@ -1,0 +1,2 @@
+composite_group_id,group_name,payment_event_id,source_id,payout_id,gross_amount,processor_fee,net_amount,allocation_line_count,approval_eligible,approval_status,review_notes
+wedding_party_20260703,Wedding Party Remaining Balance,Main Guesty::txn_3TpFS8JtejknM7351CcFHHqJ,ch_3TpFS8JtejknM73515dqcahj,po_1TqMRVJtejknM735LuF9w3hi,1565.19,45.69,1519.5,6,Yes,Promoted,Allocation supplied from wedding party invoice prepared by Matt.
