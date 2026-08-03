@@ -3,7 +3,7 @@ DSRL ACCOUNTING ENGINE PATCH
 
 Phase
 -----
-11G — Composite Charge Allocation
+11H — Fully Refunded Stripe Families
 
 Install
 -------
@@ -11,12 +11,10 @@ Extract the CONTENTS of this ZIP directly into the repository root.
 
 Files Added
 -----------
-promote_composite_charge_allocation_v11.py
-src/review/composite_charge_allocation.py
-tests/test_composite_charge_allocation_v11.py
-config/composite_charge_allocations_v11.csv
-config/composite_charge_approvals_v11.csv
-docs/COMPOSITE_CHARGE_ALLOCATION_V11_PHASE_11G.md
+promote_refunded_stripe_families_v11.py
+src/review/refunded_stripe_families.py
+tests/test_refunded_stripe_families_v11.py
+docs/REFUNDED_STRIPE_FAMILIES_V11_PHASE_11H.md
 README_INSTALL.txt
 
 Files Modified
@@ -29,14 +27,14 @@ None
 
 Run
 ---
-python -m pytest
-python promote_composite_charge_allocation_v11.py
+python -m pytest tests\test_refunded_stripe_families_v11.py -q
+python promote_refunded_stripe_families_v11.py
 
-Then approve the wedding-party row in:
+Then approve Ryan Staab in:
 
-config/composite_charge_approvals_v11.csv
+config/refunded_stripe_family_approvals_v11.csv
 
 Preview and apply:
 
-python promote_composite_charge_allocation_v11.py
-python promote_composite_charge_allocation_v11.py --apply
+python promote_refunded_stripe_families_v11.py
+python promote_refunded_stripe_families_v11.py --apply
