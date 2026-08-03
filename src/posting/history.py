@@ -107,7 +107,12 @@ def build_proposed_posting_history(*, allocations, payment_ledger,
 
         tx_type = _text(a.get("transaction_type")).lower()
         posting_type = "Original" if tx_type not in {
-            "refund","reversal","dispute","adjustment"
+            "refund",
+            "reversal",
+            "dispute",
+            "adjustment",
+            "resolution adjustment",
+            "cancellation fee",
         } else "Source Event"
 
         proposed_rows.append({

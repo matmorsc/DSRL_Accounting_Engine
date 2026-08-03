@@ -8,6 +8,13 @@ from src.posting.history import (
 )
 
 
+AIRBNB_ADJUSTMENT_EVENT_TYPES = {
+    "adjustment",
+    "resolution adjustment",
+    "cancellation fee",
+}
+
+
 def _text(value: object) -> str:
     if value is None:
         return ""
@@ -40,7 +47,7 @@ def build_airbnb_adjustment_review(
         .astype(str)
         .str.lower()
         .str.strip()
-        .eq("adjustment")
+        .isin(AIRBNB_ADJUSTMENT_EVENT_TYPES)
     ].copy()
 
     rows: list[dict[str, object]] = []
@@ -100,7 +107,9 @@ def build_airbnb_adjustment_review(
                     first.get("payment_event_id")
                 ),
                 "processor": "Airbnb",
-                "transaction_type": "adjustment",
+                "transaction_type": _text(
+                    first.get("transaction_type")
+                ).lower(),
                 "transaction_date": _text(
                     first.get("transaction_date")
                 ),
@@ -194,7 +203,7 @@ def promote_airbnb_adjustments(
         .astype(str)
         .str.lower()
         .str.strip()
-        .eq("adjustment")
+        .isin(AIRBNB_ADJUSTMENT_EVENT_TYPES)
     ].copy()
 
     existing_ids = set(

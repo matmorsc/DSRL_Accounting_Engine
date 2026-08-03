@@ -290,13 +290,51 @@ def normalize_airbnb(path: Path) -> pd.DataFrame:
         confirmation_code,
     )
 
-    gross_amount = _money(frame["Gross earnings"]).where(
-        reservation_rows,
+    payout_rows = transaction_type.eq("payout")
+
+    # Airbnb detail rows use different monetary columns by row type:
+    # reservations: Gross earnings less service fees equals Amount;
+    # payouts: Paid out is the transfer amount;
+    # adjustments/cancellation fees: Paid out and Gross earnings may be
+    # blank or zero even though Amount and fees carry the payout effect.
+    service_fee = (
+        _money(frame["Service fee"])
+        + _money(frame["Fast pay fee"])
+    )
+
+    non_payout_amount = _money(frame["Amount"])
+    net_amount = non_payout_amount.where(
+        ~payout_rows,
         _money(frame["Paid out"]),
     )
 
-    net_amount = _money(frame["Amount"]).where(
-        reservation_rows,
+    non_payout_gross = _money(frame["Gross earnings"])
+
+    # For non-reservation source events, derive gross when Airbnb leaves
+    # Gross earnings at zero:
+    #
+    #     gross amount - processor fee = net amount
+    #     gross amount = net amount + processor fee
+    #
+    # Examples:
+    #   cancellation fee: -50.00 + 0.00 = -50.00 gross
+    #   adjustment:       -65.57 + 12.03 = -53.54 gross
+    source_event_rows = ~reservation_rows & ~payout_rows
+    derived_source_event_gross = (
+        net_amount + service_fee
+    ).round(2)
+
+    non_payout_gross = non_payout_gross.where(
+        ~(
+            source_event_rows
+            & non_payout_gross.abs().le(0.005)
+            & net_amount.abs().gt(0.005)
+        ),
+        derived_source_event_gross,
+    )
+
+    gross_amount = non_payout_gross.where(
+        ~payout_rows,
         _money(frame["Paid out"]),
     )
 
@@ -310,10 +348,7 @@ def normalize_airbnb(path: Path) -> pd.DataFrame:
             "transaction_date": _dates(frame["Date"]),
             "available_date": _dates(frame["Arriving by date"]),
             "gross_amount": gross_amount,
-            "processor_fee": (
-                _money(frame["Service fee"])
-                + _money(frame["Fast pay fee"])
-            ),
+            "processor_fee": service_fee,
             "net_amount": net_amount,
             "reservation_id": "",
             "channel_reservation_id": confirmation_code,

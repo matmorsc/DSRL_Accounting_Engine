@@ -9,6 +9,8 @@ PAYMENT_TYPES = {
     "reservation",
     "refund",
     "adjustment",
+    "resolution adjustment",
+    "cancellation fee",
 }
 
 PAYOUT_TYPES = {"payout"}

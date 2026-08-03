@@ -73,6 +73,15 @@ def _signed_event_amount(
     if event_type in {"refund", "reversal", "dispute"}:
         return -amount
 
+    if event_type in {
+        "adjustment",
+        "resolution adjustment",
+        "cancellation fee",
+    }:
+        # Airbnb exports already provide the accounting sign for these
+        # source events. A negative adjustment must remain negative.
+        return round(gross_amount, 2)
+
     return amount
 
 

@@ -1,40 +1,43 @@
 DSRL ACCOUNTING ENGINE PATCH
 ============================
 
-Phase
------
-11H — Fully Refunded Stripe Families
+Version
+-------
+12 — Airbnb Adjustment-Aware Reconciliation
 
 Install
 -------
 Extract the CONTENTS of this ZIP directly into the repository root.
-
-Files Added
------------
-promote_refunded_stripe_families_v11.py
-src/review/refunded_stripe_families.py
-tests/test_refunded_stripe_families_v11.py
-docs/REFUNDED_STRIPE_FAMILIES_V11_PHASE_11H.md
-README_INSTALL.txt
+Allow Windows to replace the four existing source files.
 
 Files Modified
 --------------
-None
+src/importers/normalize.py
+src/posting/payment_allocations.py
+src/posting/history.py
+src/posting/airbnb_adjustments.py
 
-Files Deleted
+Files Added
+-----------
+tests/test_airbnb_adjustment_aware_pipeline_v12.py
+docs/AIRBNB_ADJUSTMENT_AWARE_RECONCILIATION_V12.md
+README_INSTALL.txt
+
+Validation
+----------
+python -m pytest tests\test_airbnb_adjustment_aware_pipeline_v12.py tests\test_airbnb_adjustment_promotion.py tests\test_airbnb_sequence.py -q
+
+Expected: 12 passed
+
+The existing unrelated Stripe diagnostic test may still fail in the full suite:
+tests/test_stripe_seed_candidate_diagnostics_v11.py
+
+Next Workflow
 -------------
-None
-
-Run
----
-python -m pytest tests\test_refunded_stripe_families_v11.py -q
-python promote_refunded_stripe_families_v11.py
-
-Then approve Ryan Staab in:
-
-config/refunded_stripe_family_approvals_v11.csv
-
-Preview and apply:
-
-python promote_refunded_stripe_families_v11.py
-python promote_refunded_stripe_families_v11.py --apply
+1. Rerun the main build from the raw exports so Airbnb amounts are normalized again.
+2. Run: python build_airbnb_adjustment_review.py
+3. Review data\processed\airbnb_adjustment_review.csv
+4. Change approved_for_promotion from Pending to Yes for the four intended Airbnb groups.
+5. Run: python promote_airbnb_adjustments.py
+6. Type PROMOTE.
+7. Rebuild downstream posting history, deposit drafts, posting package, exception reports, and workbook.
