@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from src.artifacts import require_fresh_artifact
 
 from src.presentation.posting_workbook import (
     export_posting_package,
@@ -29,14 +30,18 @@ def main() -> int:
     )
 
     try:
-        if not summary_path.exists():
-            raise FileNotFoundError(
-                "Run build_posting_package_v10.py first."
-            )
-        if not lines_path.exists():
-            raise FileNotFoundError(
-                "Run build_posting_package_v10.py first."
-            )
+        package_command = "python build_posting_package_v10.py"
+        ledger_input = PROCESSED / "deposit_drafts_v9.csv"
+        require_fresh_artifact(
+            summary_path,
+            generated_by=package_command,
+            newer_than=(ledger_input,),
+        )
+        require_fresh_artifact(
+            lines_path,
+            generated_by=package_command,
+            newer_than=(ledger_input,),
+        )
 
         summaries = load_summary(summary_path)
         output_path = (

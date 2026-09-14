@@ -3,6 +3,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
+from src.artifacts import require_fresh_artifact
 from src.posting.history import (
     build_proposed_posting_history,
     read_posting_history,
@@ -19,18 +20,23 @@ def read_csv(name):
         raise FileNotFoundError(f"Missing {path}. Run the current pipeline first.")
     return pd.read_csv(path)
 
-def choose(candidates):
-    for name in candidates:
-        if (PROCESSED / name).exists():
-            return name
-    raise FileNotFoundError("No required processed source file found.")
-
 def main():
     print("DSRL Posting History V8 - Phase A")
     print("=" * 44)
     try:
-        allocation_file = choose(["payment_allocations_v6.csv","payment_allocations.csv"])
-        ledger_file = choose(["payment_ledger_v6.csv","payment_ledger.csv"])
+        allocation_file = "payment_allocations_v6.csv"
+        ledger_file = "payment_ledger_v6.csv"
+        canonical_ledger = PROCESSED / "payment_ledger.csv"
+        require_fresh_artifact(
+            PROCESSED / allocation_file,
+            generated_by="python build_stripe_payout_reconciliation_v6.py",
+            newer_than=(canonical_ledger,),
+        )
+        require_fresh_artifact(
+            PROCESSED / ledger_file,
+            generated_by="python build_stripe_payout_reconciliation_v6.py",
+            newer_than=(canonical_ledger,),
+        )
         existing = read_posting_history(HISTORY_PATH)
         validate_posting_history(existing)
         proposed, diagnostics = build_proposed_posting_history(

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+from src.artifacts import require_fresh_artifact
 
 from src.posting.history import (
     POSTING_HISTORY_COLUMNS,
@@ -29,16 +30,6 @@ def read_csv(name: str) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Missing {path}.")
     return pd.read_csv(path)
-
-
-def choose_payment_ledger() -> str:
-    for name in [
-        "payment_ledger_v6.csv",
-        "payment_ledger.csv",
-    ]:
-        if (PROCESSED / name).exists():
-            return name
-    raise FileNotFoundError("No payment ledger found.")
 
 
 def read_manual_seeds() -> pd.DataFrame:
@@ -81,7 +72,12 @@ def main() -> int:
     print("=" * 56)
 
     try:
-        ledger_file = choose_payment_ledger()
+        ledger_file = "payment_ledger_v6.csv"
+        require_fresh_artifact(
+            PROCESSED / ledger_file,
+            generated_by="python build_stripe_payout_reconciliation_v6.py",
+            newer_than=(PROCESSED / "payment_ledger.csv",),
+        )
         history = read_posting_history(
             HISTORY_PATH
         )

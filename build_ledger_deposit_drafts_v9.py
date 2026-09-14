@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
+from src.artifacts import require_fresh_artifact
 
 from src.posting.history import (
     POSTING_HISTORY_COLUMNS,
@@ -47,13 +48,6 @@ def read_optional_history(path: Path) -> pd.DataFrame:
     return frame[POSTING_HISTORY_COLUMNS]
 
 
-def choose_file(candidates: list[str], label: str) -> str:
-    for name in candidates:
-        if (PROCESSED / name).exists():
-            return name
-    raise FileNotFoundError(f"No {label} file found.")
-
-
 def main() -> int:
     print("DSRL Ledger-Backed Deposit Drafts V9")
     print("=" * 48)
@@ -69,33 +63,32 @@ def main() -> int:
             settings["matching"]["amount_tolerance"]
         )
 
-        legacy_file = choose_file(
-            [
-                "deposit_drafts_v6.csv",
-                "deposit_drafts_v2.csv",
-            ],
-            "legacy deposit draft",
-        )
-        payout_file = choose_file(
-            [
-                "payout_ledger_v6.csv",
-                "payout_ledger.csv",
-            ],
-            "payout ledger",
-        )
-        posting_status_file = choose_file(
-            [
-                "posting_status_v6.csv",
-                "posting_status.csv",
-            ],
-            "posting status",
+        legacy_file = "deposit_drafts_v6.csv"
+        payout_file = "payout_ledger_v6.csv"
+        posting_status_file = "posting_status_v6.csv"
+        v6_command = "python build_stripe_payout_reconciliation_v6.py"
+        canonical_dependencies = {
+            payout_file: PROCESSED / "payout_ledger.csv",
+            posting_status_file: PROCESSED / "posting_status.csv",
+            legacy_file: PROCESSED / "posting_status.csv",
+        }
+        for filename, dependency in canonical_dependencies.items():
+            require_fresh_artifact(
+                PROCESSED / filename,
+                generated_by=v6_command,
+                newer_than=(dependency,),
+            )
+
+        reversal_path = PROCESSED / "posting_history_reversal_preview.csv"
+        require_fresh_artifact(
+            reversal_path,
+            generated_by="python build_posting_history_reversals_v8.py",
+            newer_than=(PROCESSED / payout_file,),
         )
 
         persistent = read_posting_history(HISTORY)
         seeds = read_optional_history(SEEDS)
-        reversals = read_processed(
-            "posting_history_reversal_preview.csv"
-        )
+        reversals = read_processed(reversal_path.name)
 
         combined_all = combine_ledger_sources(
             persistent_history=persistent,

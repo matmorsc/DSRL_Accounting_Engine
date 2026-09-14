@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+from src.artifacts import require_fresh_artifact
 
 from src.presentation.posting_package import build_posting_package
 
@@ -19,26 +20,28 @@ def read_csv(name):
     return pd.read_csv(path)
 
 
-def choose_file(candidates, label):
-    for name in candidates:
-        if (PROCESSED / name).exists():
-            return name
-    raise FileNotFoundError(f"No {label} file found.")
-
-
 def main():
     print("DSRL Posting Package V10 - Phase 10A.1")
     print("=" * 50)
 
     try:
-        payout_file = choose_file(
-            ["payout_ledger_v6.csv", "payout_ledger.csv"],
-            "payout ledger",
+        payout_file = "payout_ledger_v6.csv"
+        bank_file = "bank_transactions.csv"
+        require_fresh_artifact(
+            PROCESSED / payout_file,
+            generated_by="python build_stripe_payout_reconciliation_v6.py",
+            newer_than=(PROCESSED / "payout_ledger.csv",),
         )
-        bank_file = choose_file(
-            ["bank_transactions.csv"],
-            "bank transactions",
-        )
+        for filename in (
+            "deposit_drafts_v9.csv",
+            "deposit_draft_lines_v9.csv",
+            "deposit_draft_comparison_v9.csv",
+        ):
+            require_fresh_artifact(
+                PROCESSED / filename,
+                generated_by="python build_ledger_deposit_drafts_v9.py",
+                newer_than=(PROCESSED / payout_file,),
+            )
 
         summary, lines = build_posting_package(
             deposit_drafts=read_csv("deposit_drafts_v9.csv"),
