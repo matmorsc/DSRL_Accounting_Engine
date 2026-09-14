@@ -83,22 +83,6 @@ def main() -> int:
             account_mapping=account_mapping,
         )
 
-        unmapped_accounts = sorted(
-            {
-                name
-                for name in membership.loc[
-                    membership["processor_account"].eq(""),
-                    "stripe_account_name",
-                ]
-                if str(name).strip()
-            }
-        )
-        if unmapped_accounts:
-            raise ValueError(
-                "Unmapped Stripe report account names: "
-                + ", ".join(unmapped_accounts)
-            )
-
         payment_ledger = read_csv("payment_ledger.csv")
 
         # Stripe refund/adjustment rows often have no reservation metadata.

@@ -169,6 +169,22 @@ def normalize_payout_reconciliation(
         & output["balance_transaction_id"].ne("")
     ].copy()
 
+    unmapped_accounts = sorted(
+        {
+            name
+            for name in output.loc[
+                output["processor_account"].eq(""),
+                "stripe_account_name",
+            ]
+            if str(name).strip()
+        }
+    )
+    if unmapped_accounts:
+        raise ValueError(
+            "Unmapped Stripe report account names: "
+            + ", ".join(unmapped_accounts)
+        )
+
     duplicate_keys = (
         output.groupby(
             [

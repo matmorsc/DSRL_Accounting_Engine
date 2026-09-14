@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
+import yaml
 
 from src.importers.stripe_payout_reconciliation import (
     normalize_payout_reconciliation,
@@ -12,12 +14,29 @@ from src.reconciliation.stripe_payout_membership import (
 )
 
 
-def report_file(tmp_path: Path) -> Path:
-    path = tmp_path / "report.csv"
+ACCOUNT_MAPPING_PATH = (
+    Path(__file__).parents[1]
+    / "config"
+    / "stripe_payout_account_mapping.yaml"
+)
+
+
+def configured_account_mapping() -> dict[str, str]:
+    with ACCOUNT_MAPPING_PATH.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def report_file(
+    tmp_path: Path,
+    *,
+    account_name: str = "DSRL - Guesty",
+    filename: str = "report.csv",
+) -> Path:
+    path = tmp_path / filename
     pd.DataFrame([
         {
             "account_id": "acct_1",
-            "account_name": "DSRL - Guesty",
+            "account_name": account_name,
             "automatic_payout_id": "po_target",
             "automatic_payout_effective_at": (
                 "2026-07-10 00:00:00"
@@ -34,7 +53,7 @@ def report_file(tmp_path: Path) -> Path:
         },
         {
             "account_id": "acct_1",
-            "account_name": "DSRL - Guesty",
+            "account_name": account_name,
             "automatic_payout_id": "po_target",
             "automatic_payout_effective_at": (
                 "2026-07-10 00:00:00"
@@ -51,6 +70,44 @@ def report_file(tmp_path: Path) -> Path:
         },
     ]).to_csv(path, index=False)
     return path
+
+
+@pytest.mark.parametrize(
+    ("stripe_name", "processor_account"),
+    [
+        ("DSRL - Cognito", "Legacy Cognito"),
+        ("DSRL - Keycheck", "Legacy Keycheck"),
+    ],
+)
+def test_configured_legacy_account_names_are_recognized(
+    tmp_path: Path,
+    stripe_name: str,
+    processor_account: str,
+):
+    result = normalize_payout_reconciliation(
+        [report_file(tmp_path, account_name=stripe_name)],
+        account_mapping=configured_account_mapping(),
+    )
+
+    assert set(result["processor_account"]) == {
+        processor_account
+    }
+
+
+def test_unknown_stripe_account_name_is_rejected(tmp_path: Path):
+    with pytest.raises(
+        ValueError,
+        match="Unmapped Stripe report account names: Unknown Lodge Account",
+    ):
+        normalize_payout_reconciliation(
+            [
+                report_file(
+                    tmp_path,
+                    account_name="Unknown Lodge Account",
+                )
+            ],
+            account_mapping=configured_account_mapping(),
+        )
 
 
 def test_report_normalizes_exact_membership(tmp_path: Path):
