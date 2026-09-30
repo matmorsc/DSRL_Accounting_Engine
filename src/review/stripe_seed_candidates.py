@@ -837,7 +837,14 @@ def build_stripe_seed_candidates(
                     "zero out the original revenue/tax allocation."
                     if reservation is not None
                     and components["total"] == 0
-                    else ""
+                    else (
+                        "Possible causes include a reservation adjustment, "
+                        "fee or tax component not represented in the normalized "
+                        "Guesty reservation components, or a Stripe charge that "
+                        "does not correspond exactly to the reservation gross."
+                        if diagnostic_type == "Reservation Gross Mismatch"
+                        else ""
+                    )
                 ),
             }
         )
