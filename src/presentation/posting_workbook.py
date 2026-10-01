@@ -74,6 +74,27 @@ class PackageLine:
     line_note: str
 
 
+@dataclass
+class _GroupedLineAccumulator:
+    first_line_number: int
+    package_id: str
+    payout_id: str
+    account: str
+    qb_class: str
+    posting_type: str
+    sign_bucket: str
+    amount: float = 0.0
+    line_count: int = 0
+    source_descriptions: set[str] = None
+    line_notes: set[str] = None
+
+    def __post_init__(self) -> None:
+        if self.source_descriptions is None:
+            self.source_descriptions = set()
+        if self.line_notes is None:
+            self.line_notes = set()
+
+
 def _text(value: object) -> str:
     return "" if value is None else str(value).strip()
 
@@ -238,6 +259,127 @@ def _set_internal_hyperlink(
         display=display,
     )
     cell.style = "Hyperlink"
+
+
+def _amount_sign_bucket(amount: float) -> str:
+    rounded = round(float(amount), 2)
+    if rounded > 0:
+        return "Positive"
+    if rounded < 0:
+        return "Negative"
+    return "Zero"
+
+
+def _summary_description(
+    *,
+    account: str,
+    posting_type: str,
+    sign_bucket: str,
+) -> str:
+    account_label = account or "Uncategorized"
+    posting_label = posting_type or "Entry"
+
+    if posting_label == "Original":
+        if sign_bucket == "Negative":
+            return f"Negative - {account_label}"
+        if sign_bucket == "Zero":
+            return f"Zero Amount - {account_label}"
+        return account_label
+
+    if sign_bucket == "Negative":
+        return f"{posting_label} - {account_label}"
+    if sign_bucket == "Zero":
+        return f"{posting_label} (Zero Amount) - {account_label}"
+    return f"{posting_label} - {account_label}"
+
+
+def _group_package_lines(
+    lines: list[PackageLine],
+) -> list[PackageLine]:
+    if not lines:
+        return []
+
+    grouped: dict[
+        tuple[str, str, str, str],
+        _GroupedLineAccumulator,
+    ] = {}
+
+    for line in sorted(lines, key=lambda item: item.line_number):
+        sign_bucket = _amount_sign_bucket(line.amount)
+        key = (
+            line.account,
+            line.qb_class,
+            line.posting_type,
+            sign_bucket,
+        )
+        if key not in grouped:
+            grouped[key] = _GroupedLineAccumulator(
+                first_line_number=line.line_number,
+                package_id=line.package_id,
+                payout_id=line.payout_id,
+                account=line.account,
+                qb_class=line.qb_class,
+                posting_type=line.posting_type,
+                sign_bucket=sign_bucket,
+            )
+
+        bucket = grouped[key]
+        bucket.amount = round(bucket.amount + line.amount, 2)
+        bucket.line_count += 1
+        if line.description:
+            bucket.source_descriptions.add(line.description)
+        if line.line_note:
+            bucket.line_notes.add(line.line_note)
+
+    grouped_lines: list[PackageLine] = []
+    for line_number, bucket in enumerate(
+        sorted(
+            grouped.values(),
+            key=lambda item: item.first_line_number,
+        ),
+        start=1,
+    ):
+        line_note_parts = [
+            f"Consolidated {bucket.line_count} line(s)."
+        ]
+        if bucket.line_notes:
+            line_note_parts.append(
+                " ".join(sorted(bucket.line_notes))
+            )
+
+        grouped_lines.append(
+            PackageLine(
+                package_id=bucket.package_id,
+                payout_id=bucket.payout_id,
+                line_number=line_number,
+                account=bucket.account,
+                qb_class=bucket.qb_class,
+                description=_summary_description(
+                    account=bucket.account,
+                    posting_type=bucket.posting_type,
+                    sign_bucket=bucket.sign_bucket,
+                ),
+                amount=round(bucket.amount, 2),
+                posting_type=bucket.posting_type,
+                ledger_source="",
+                line_note=" ".join(line_note_parts),
+            )
+        )
+
+    original_total = round(sum(line.amount for line in lines), 2)
+    grouped_total = round(
+        sum(line.amount for line in grouped_lines),
+        2,
+    )
+    if grouped_total != original_total:
+        payout_id = lines[0].payout_id
+        raise ValueError(
+            "Workbook line consolidation changed payout total for "
+            f"{payout_id}: original={original_total:.2f}, "
+            f"grouped={grouped_total:.2f}."
+        )
+
+    return grouped_lines
 
 
 def _write_dashboard(
@@ -608,10 +750,7 @@ def _write_package_sheet(
         )
     _style_header(sheet[12])
 
-    ordered_lines = sorted(
-        lines,
-        key=lambda item: item.line_number,
-    )
+    ordered_lines = _group_package_lines(lines)
     first_line_row = 13
 
     for row_index, line in enumerate(
