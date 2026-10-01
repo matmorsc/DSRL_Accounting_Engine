@@ -21,6 +21,7 @@ from src.reconciliation.payouts import (
     match_payouts_to_bank,
 )
 from src.posting.engine import build_posting_status
+from src.posting.history import read_posting_history
 from src.posting.payment_allocations import (
     build_payment_allocations,
 )
@@ -44,6 +45,8 @@ ACCOUNT_MAP = (
 POSTING_OVERRIDES = ROOT / "config" / "posting_overrides.csv"
 PAYMENT_MATCHES = ROOT / "config" / "manual_payment_matches.csv"
 PAYOUT_ADJUSTMENTS = ROOT / "config" / "payout_adjustments.csv"
+POSTING_HISTORY = ROOT / "config" / "posting_history.csv"
+TAX_RATES = ROOT / "config" / "tax_rates_v11.csv"
 
 
 def read_csv(name: str) -> pd.DataFrame:
@@ -53,6 +56,53 @@ def read_csv(name: str) -> pd.DataFrame:
             f"Missing {path}. Run `python run.py` first."
         )
     return pd.read_csv(path)
+
+
+def _inject_zero_basis_tax_rates(
+    draft_rules: dict,
+) -> dict:
+    updated = dict(draft_rules or {})
+
+    zero_basis = dict(
+        updated.get(
+            "zero_basis_reconstruction",
+            {},
+        )
+        or {}
+    )
+
+    if not TAX_RATES.exists():
+        updated["zero_basis_reconstruction"] = zero_basis
+        return updated
+
+    frame = pd.read_csv(TAX_RATES)
+    if frame.empty:
+        updated["zero_basis_reconstruction"] = zero_basis
+        return updated
+
+    required = {"state_rate", "local_rate"}
+    if not required.issubset(frame.columns):
+        updated["zero_basis_reconstruction"] = zero_basis
+        return updated
+
+    if "effective_date" in frame.columns:
+        ordered = frame.copy()
+        ordered["_effective"] = pd.to_datetime(
+            ordered["effective_date"],
+            errors="coerce",
+        )
+        ordered = ordered.sort_values(
+            "_effective",
+            na_position="last",
+        )
+        selected = ordered.iloc[-1]
+    else:
+        selected = frame.iloc[-1]
+
+    zero_basis["state_rate"] = float(selected["state_rate"])
+    zero_basis["local_rate"] = float(selected["local_rate"])
+    updated["zero_basis_reconstruction"] = zero_basis
+    return updated
 
 
 def main() -> int:
@@ -65,6 +115,9 @@ def main() -> int:
 
         with DRAFT_RULES.open("r", encoding="utf-8") as handle:
             draft_rules = yaml.safe_load(handle)
+        draft_rules = _inject_zero_basis_tax_rates(
+            draft_rules
+        )
 
         with ACCOUNT_MAP.open("r", encoding="utf-8") as handle:
             account_mapping = yaml.safe_load(handle) or {}
@@ -145,6 +198,9 @@ def main() -> int:
                 payment_ledger=payment_ledger,
                 reservations=read_csv("reservations.csv"),
                 rules=draft_rules,
+                existing_history=read_posting_history(
+                    POSTING_HISTORY
+                ),
             )
         )
 

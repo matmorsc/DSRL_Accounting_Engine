@@ -4,6 +4,10 @@ from typing import Any
 
 import pandas as pd
 
+from src.review.original_charge_reconstruction import (
+    reconstruct_tax_allocation,
+)
+
 
 REQUIRED_PAYMENT_COLUMNS = {
     "payment_event_id",
@@ -61,6 +65,51 @@ def _money(value: object) -> float:
         return round(float(value), 2)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _parsed_money(value: object) -> tuple[float, bool]:
+    try:
+        if pd.isna(value):
+            return 0.0, False
+        return round(float(value), 2), True
+    except (TypeError, ValueError):
+        return 0.0, False
+
+
+def _parsed_rate(value: object) -> tuple[float, bool]:
+    try:
+        if pd.isna(value):
+            return 0.0, False
+        return float(value), True
+    except (TypeError, ValueError):
+        return 0.0, False
+
+
+def _active_original_event_ids(
+    existing_history: pd.DataFrame | None,
+) -> set[str]:
+    if existing_history is None or existing_history.empty:
+        return set()
+    required = {"payment_event_id", "posting_type", "status"}
+    if not required.issubset(existing_history.columns):
+        return set()
+
+    return set(
+        existing_history.loc[
+            existing_history["posting_type"]
+            .astype(str)
+            .str.strip()
+            .eq("Original")
+            & existing_history["status"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .eq("active"),
+            "payment_event_id",
+        ]
+        .astype(str)
+        .str.strip()
+    )
 
 
 def _signed_event_amount(
@@ -168,11 +217,182 @@ def _allocate_marketplace_event(
     return {"Revenue": round(event_amount, 2)}
 
 
+def _attempt_zero_basis_reconstruction(
+    *,
+    event: pd.Series,
+    reservation: pd.Series,
+    rules: dict[str, Any],
+    income_account: str,
+    qb_class: str,
+    active_original_event_ids: set[str],
+) -> tuple[dict[str, float], str, str]:
+    reasons: list[str] = []
+    settings = rules.get(
+        "zero_basis_reconstruction",
+        {},
+    )
+
+    event_id = _text(event.get("payment_event_id"))
+    processor = _text(event.get("processor"))
+    event_type = _text(event.get("transaction_type")).lower()
+    listing = _text(reservation.get("listing"))
+
+    enabled_processors = {
+        _text(value)
+        for value in settings.get(
+            "enabled_processors",
+            ["Stripe"],
+        )
+    }
+    enabled_types = {
+        _text(value).lower()
+        for value in settings.get(
+            "transaction_types",
+            ["charge"],
+        )
+    }
+
+    tolerance = float(
+        rules.get("amount_tolerance", 0.02)
+    )
+    gross, gross_valid = _parsed_money(
+        event.get("gross_amount")
+    )
+    fee, fee_valid = _parsed_money(
+        event.get("processor_fee")
+    )
+    net, net_valid = _parsed_money(
+        event.get("net_amount")
+    )
+
+    component_total = round(
+        _money(reservation.get("accommodation_revenue"))
+        + _money(reservation.get("state_tax"))
+        + _money(reservation.get("county_tax"))
+        + _money(reservation.get("local_tax")),
+        2,
+    )
+
+    if processor not in enabled_processors:
+        reasons.append(
+            f"Processor {processor} is not enabled for zero-basis reconstruction."
+        )
+    if event_type not in enabled_types:
+        reasons.append(
+            f"Transaction type {event_type} is not enabled for zero-basis reconstruction."
+        )
+    if not gross_valid or gross <= 0:
+        reasons.append(
+            "Gross amount is missing, invalid, or non-positive."
+        )
+    if not fee_valid or fee < 0:
+        reasons.append(
+            "Processor fee is missing or invalid for reconstruction."
+        )
+    if not net_valid:
+        reasons.append(
+            "Net amount is missing or invalid for reconstruction."
+        )
+    if not listing:
+        reasons.append(
+            "Listing metadata is missing."
+        )
+    if not income_account:
+        reasons.append(
+            "Listing does not map to a revenue account."
+        )
+    if not qb_class:
+        reasons.append(
+            "Listing does not map to a QuickBooks class."
+        )
+    if component_total > 0.005:
+        reasons.append(
+            "Reservation already has positive revenue/tax basis."
+        )
+    if event_id in active_original_event_ids:
+        reasons.append(
+            "Event already has active Original posting history."
+        )
+
+    state_rate, state_ok = _parsed_rate(
+        settings.get("state_rate")
+    )
+    local_rate, local_ok = _parsed_rate(
+        settings.get("local_rate")
+    )
+    if not state_ok or state_rate <= 0:
+        reasons.append(
+            "Missing or invalid zero-basis state tax rate configuration."
+        )
+    if not local_ok or local_rate <= 0:
+        reasons.append(
+            "Missing or invalid zero-basis local tax rate configuration."
+        )
+
+    if reasons:
+        return {}, "", " ".join(reasons)
+
+    try:
+        revenue, state_tax, local_tax = (
+            reconstruct_tax_allocation(
+                gross_amount=gross,
+                state_rate=state_rate,
+                local_rate=local_rate,
+            )
+        )
+    except ValueError as exc:
+        return {}, "", str(exc)
+
+    gross_total = round(
+        revenue + state_tax + local_tax,
+        2,
+    )
+    reconstructed_net = round(
+        gross_total - abs(fee),
+        2,
+    )
+
+    if abs(gross_total - gross) > tolerance:
+        return (
+            {},
+            "",
+            (
+                "Reconstruction failed gross reconciliation: "
+                f"{gross_total:.2f} vs {gross:.2f}."
+            ),
+        )
+
+    if abs(reconstructed_net - net) > tolerance:
+        return (
+            {},
+            "",
+            (
+                "Reconstruction failed net reconciliation: "
+                f"{reconstructed_net:.2f} vs {net:.2f}."
+            ),
+        )
+
+    detail = (
+        "Stripe zero-basis reservation allocation reconstructed "
+        "from processor gross using configured tax rates."
+    )
+    return (
+        {
+            "Revenue": revenue,
+            "State Tax": state_tax,
+            "Local Tax": local_tax,
+        },
+        detail,
+        "",
+    )
+
+
 def build_payment_allocations(
     *,
     payment_ledger: pd.DataFrame,
     reservations: pd.DataFrame,
     rules: dict[str, Any],
+    existing_history: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     _require(
         payment_ledger,
@@ -204,6 +424,9 @@ def build_payment_allocations(
 
     by_reservation, by_channel = _reservation_indexes(
         reservations
+    )
+    active_original_event_ids = _active_original_event_ids(
+        existing_history
     )
 
     allocation_rows: list[dict[str, object]] = []
@@ -273,6 +496,45 @@ def build_payment_allocations(
                     reservation=reservation,
                 )
             )
+
+            if not allocations:
+                (
+                    reconstructed,
+                    reconstructed_note,
+                    reconstructed_block_reason,
+                ) = _attempt_zero_basis_reconstruction(
+                    event=event,
+                    reservation=reservation,
+                    rules=rules,
+                    income_account=income_account,
+                    qb_class=qb_class,
+                    active_original_event_ids=active_original_event_ids,
+                )
+
+                if reconstructed:
+                    allocations = reconstructed
+                    diagnostic_rows.append(
+                        {
+                            "payment_event_id": event_id,
+                            "payout_id": payout_id,
+                            "processor": processor,
+                            "diagnostic_type": "Zero-Basis Reconstruction",
+                            "detail": reconstructed_note,
+                            "event_amount": signed_amount,
+                        }
+                    )
+                    allocation_note = ""
+                elif reconstructed_block_reason:
+                    diagnostic_rows.append(
+                        {
+                            "payment_event_id": event_id,
+                            "payout_id": payout_id,
+                            "processor": processor,
+                            "diagnostic_type": "Zero-Basis Reconstruction Skipped",
+                            "detail": reconstructed_block_reason,
+                            "event_amount": signed_amount,
+                        }
+                    )
 
         if allocation_note:
             diagnostic_rows.append(

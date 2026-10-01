@@ -24,3 +24,9 @@ tax_descriptions:
 
 marketplace_remitted_tax_processors:
   - Airbnb
+
+zero_basis_reconstruction:
+  enabled_processors:
+    - Stripe
+  transaction_types:
+    - charge
